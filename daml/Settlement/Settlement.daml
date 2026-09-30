@@ -1,0 +1,220 @@
+module Settlement.Settlement where
+
+import Obligation.Types
+import Obligation.Contract
+
+-- ============================================================
+-- OBLIGAX
+-- SETTLEMENT DOMAIN
+--
+-- SettlementInstruction represents an instruction to settle an
+-- existing ObligaX obligation through an external settlement
+-- mechanism.
+-- ============================================================
+
+data SettlementRail
+    = BankPaymentRail
+    | RTGS
+    | InternalLedger
+    | TokenizedDeposit
+    | Stablecoin
+    | SecuritiesSettlement
+    | ExternalCustodian
+    deriving (Eq, Ord, Show)
+
+data SettlementFailureReason
+    = SettlementTimeout
+    | SettlementRailUnavailable
+    | InsufficientFunds
+    | ComplianceHold
+    | CounterpartyUnavailable
+    | InvalidSettlementReference
+    | DuplicateSettlement
+    | ExternalRejection
+    | TechnicalFailure
+    | UnknownSettlementFailure
+    deriving (Eq, Ord, Show)
+
+data SettlementRequestMetadata
+    = SettlementRequestMetadata
+    with
+      sourceSystem : Text
+      sourceReference : Text
+      settlementRail : SettlementRail
+      createdAt : Time
+      createdBy : Party
+    deriving (Eq, Show)
+
+data SettlementExecutionMetadata
+    = SettlementExecutionMetadata
+    with
+      externalTransactionId : Text
+      settlementReference : Text
+      processedAt : Time
+      processedBy : Party
+    deriving (Eq, Show)
+
+data SettlementFailureMetadata
+    = SettlementFailureMetadata
+    with
+      reason : SettlementFailureReason
+      details : Text
+      failedAt : Time
+      failedBy : Party
+    deriving (Eq, Show)
+
+template SettlementInstruction
+  with
+    settlementId : Text
+    obligationId : Text
+    obligationCid : ContractId Obligation
+    creditor : Party
+    debtor : Party
+    amount : Decimal
+    currency : Currency
+    status : SettlementStatus
+    requestMetadata : SettlementRequestMetadata
+    executionMetadata : Optional SettlementExecutionMetadata
+    failureMetadata : Optional SettlementFailureMetadata
+  where
+    signatory creditor
+    observer debtor
+
+    ensure
+      settlementId /= ""
+        && obligationId /= ""
+        && creditor /= debtor
+        && amount > 0.0
+        && requestMetadata.sourceSystem /= ""
+        && requestMetadata.sourceReference /= ""
+
+    choice StartProcessing : ContractId SettlementInstruction
+      controller creditor
+      do
+        assertMsg "SET-001: Settlement must be in Created state." (status == SettlementCreated)
+
+        obligation <- fetch obligationCid
+        assertMsg "SET-002: Obligation creditor does not match settlement." (obligation.creditor == creditor)
+        assertMsg "SET-003: Obligation debtor does not match settlement." (obligation.debtor == debtor)
+        assertMsg "SET-004: Obligation ID does not match settlement." (obligation.obligationId == obligationId)
+        assertMsg "SET-005: Obligation must be SettlementPending." (obligation.status == SettlementPending)
+
+        create this with status = SettlementProcessing
+
+    choice CompleteSettlement : ContractId SettlementInstruction
+      with
+        externalTransactionId : Text
+        settlementReference : Text
+        processedAt : Time
+      controller creditor
+      do
+        assertMsg "SET-006: Settlement must be Processing." (status == SettlementProcessing)
+        assertMsg "SET-007: External transaction ID is required." (externalTransactionId /= "")
+        assertMsg "SET-008: Settlement reference is required." (settlementReference /= "")
+
+        obligation <- fetch obligationCid
+        assertMsg "SET-009: Obligation must be SettlementPending." (obligation.status == SettlementPending)
+        assertMsg "SET-010: Obligation ID mismatch." (obligation.obligationId == obligationId)
+        assertMsg "SET-011: Settlement creditor mismatch." (obligation.creditor == creditor)
+        assertMsg "SET-012: Settlement debtor mismatch." (obligation.debtor == debtor)
+
+        settledObligationCid <- exercise obligationCid FinalizeSettlement
+
+        create this with
+          obligationCid = settledObligationCid
+          status = SettlementCompleted
+          executionMetadata = Some SettlementExecutionMetadata with
+            externalTransactionId = externalTransactionId
+            settlementReference = settlementReference
+            processedAt = processedAt
+            processedBy = creditor
+          failureMetadata = None
+
+    choice FailSettlement : ContractId SettlementInstruction
+      with
+        failureReason : SettlementFailureReason
+        failureDetails : Text
+        failedAt : Time
+      controller creditor
+      do
+        assertMsg "SET-014: Settlement must be Processing." (status == SettlementProcessing)
+        assertMsg "SET-015: Failure details are required." (failureDetails /= "")
+
+        obligation <- fetch obligationCid
+        assertMsg "SET-016: Obligation must be SettlementPending." (obligation.status == SettlementPending)
+        assertMsg "SET-017: Obligation ID mismatch." (obligation.obligationId == obligationId)
+
+        reopenedObligationCid <- exercise obligationCid ReopenAfterSettlementFailure
+
+        create this with
+          obligationCid = reopenedObligationCid
+          status = SettlementFailed
+          failureMetadata = Some SettlementFailureMetadata with
+            reason = failureReason
+            details = failureDetails
+            failedAt = failedAt
+            failedBy = creditor
+          executionMetadata = None
+
+    choice CancelSettlement : ContractId SettlementInstruction
+      with
+        cancellationReason : Text
+      controller creditor
+      do
+        assertMsg "SET-018: Settlement must be Created." (status == SettlementCreated)
+        assertMsg "SET-019: Cancellation reason is required." (cancellationReason /= "")
+
+        obligation <- fetch obligationCid
+        assertMsg "SET-020: Obligation must be SettlementPending." (obligation.status == SettlementPending)
+
+        reopenedObligationCid <- exercise obligationCid ReopenAfterSettlementFailure
+
+        create this with
+          obligationCid = reopenedObligationCid
+          status = SettlementCancelled
+          executionMetadata = None
+          failureMetadata = None
+
+    choice RetrySettlement : (ContractId SettlementInstruction, ContractId Obligation)
+      with
+        newSettlementId : Text
+        settlementReference : Text
+        settlementRail : SettlementRail
+        sourceSystem : Text
+        sourceReference : Text
+        createdAt : Time
+      controller creditor
+      do
+        assertMsg "SET-021: Only failed settlements can be retried." (status == SettlementFailed)
+        assertMsg "SET-022: New settlement ID is required." (newSettlementId /= "")
+        assertMsg "SET-023: Settlement reference is required." (settlementReference /= "")
+        assertMsg "SET-024: Source system is required." (sourceSystem /= "")
+        assertMsg "SET-025: Source reference is required." (sourceReference /= "")
+
+        obligation <- fetch obligationCid
+        assertMsg "SET-026: Obligation must be Confirmed before retry." (obligation.status == Confirmed)
+        assertMsg "SET-027: Obligation ID mismatch." (obligation.obligationId == obligationId)
+        assertMsg "SET-028: Obligation amount mismatch." (obligation.amount == amount)
+        assertMsg "SET-029: Obligation currency mismatch." (obligation.currency == currency)
+
+        pendingCid <- exercise obligationCid EnterSettlementPending
+
+        newSettlementCid <- create SettlementInstruction with
+          settlementId = newSettlementId
+          obligationId = obligationId
+          obligationCid = pendingCid
+          creditor = creditor
+          debtor = debtor
+          amount = amount
+          currency = currency
+          status = SettlementCreated
+          requestMetadata = SettlementRequestMetadata with
+            sourceSystem = sourceSystem
+            sourceReference = sourceReference
+            settlementRail = settlementRail
+            createdAt = createdAt
+            createdBy = creditor
+          executionMetadata = None
+          failureMetadata = None
+
+        return (newSettlementCid, pendingCid)

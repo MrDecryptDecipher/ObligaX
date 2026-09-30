@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ObligaX | Institutional Clearing & Settlement Console</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo">
+        <span class="logo-accent">OBLIGA</span><span class="logo-x">X</span>
+      </div>
+      <span class="badge badge-network">CANTON MAINNET · FEDWIRE/RTGS ENABLED</span>
+    </div>
+    <div class="header-right">
+      <div class="context-selector">
+        <label for="activeParticipant">Acting Participant:</label>
+        <select id="activeParticipant" class="select-input">
+          <option value="NetworkOperator">Network Operator (Clearinghouse)</option>
+          <option value="BankA" selected>Bank A (Global Custody)</option>
+          <option value="BankB">Bank B (Institutional Markets)</option>
+        </select>
+      </div>
+      <div class="status-indicator">
+        <span class="pulse-dot"></span>
+        <span id="ledgerConnectionStatus">Canton: CONNECTED</span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="app-nav">
+    <button class="nav-tab active" data-tab="obligations">Obligations Cockpit</button>
+    <button class="nav-tab" data-tab="netting">Bilateral Netting Workbench</button>
+    <button class="nav-tab" data-tab="settlement">Direct Settlement Monitor</button>
+    <button class="nav-tab" data-tab="reconciliation">Reconciliation & Audit</button>
+  </nav>
+
+  <main class="app-main">
+    <!-- TAB 1: OBLIGATIONS COCKPIT -->
+    <section id="tab-obligations" class="tab-pane active">
+      <div class="action-bar">
+        <h2>Institutional Obligations</h2>
+        <div class="btn-group">
+          <button class="btn btn-secondary" id="refreshObligationsBtn">↻ Refresh</button>
+          <button class="btn btn-primary" id="openCreateObligationModalBtn">+ Propose Obligation</button>
+        </div>
+      </div>
+
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-label">Confirmed Volume (USD)</div>
+          <div class="metric-value" id="metricConfirmedVolume">$0.00</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Pending Acceptance</div>
+          <div class="metric-value" id="metricPendingCount">0</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">In Netting / Settlement</div>
+          <div class="metric-value" id="metricInFlightCount">0</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Settled / Netted Terminal</div>
+          <div class="metric-value" id="metricTerminalCount">0</div>
+        </div>
+      </div>
+
+      <div class="data-table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Obligation ID</th>
+              <th>Creditor (Payee)</th>
+              <th>Debtor (Payer)</th>
+              <th>Amount</th>
+              <th>Currency</th>
+              <th>Status</th>
+              <th>Due Date</th>
+              <th>Version</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="obligationsTableBody">
+            <tr><td colspan="9" class="empty-state">Loading obligations from ledger...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 2: BILATERAL NETTING WORKBENCH -->
+    <section id="tab-netting" class="tab-pane">
+      <div class="action-bar">
+        <h2>Bilateral Netting Workbench</h2>
+        <p class="subtitle">Multi-leg obligations netted atomically into a single net settlement instruction.</p>
+      </div>
+
+      <div class="netting-grid">
+        <div class="panel netting-selector-panel">
+          <h3>1. Select Eligible Confirmed Obligations</h3>
+          <div class="netting-candidates-list" id="nettingCandidatesList">
+            <div class="empty-state">No eligible Confirmed obligations available for netting.</div>
+          </div>
+        </div>
+
+        <div class="panel netting-summary-panel">
+          <h3>2. Netting Calculation Preview (Atomic)</h3>
+          <div class="calculation-breakdown">
+            <div class="calc-row">
+              <span>Gross Receivable:</span>
+              <span id="nettingGrossReceivable" class="calc-val positive">$0.00</span>
+            </div>
+            <div class="calc-row">
+              <span>Gross Payable:</span>
+              <span id="nettingGrossPayable" class="calc-val negative">$0.00</span>
+            </div>
+            <div class="calc-divider"></div>
+            <div class="calc-row highlight">
+              <span>Net Settlement Amount:</span>
+              <span id="nettingNetAmount" class="calc-val">$0.00</span>
+            </div>
+            <div class="calc-row">
+              <span>Net Settlement Direction:</span>
+              <span id="nettingDirection" class="badge">N/A</span>
+            </div>
+          </div>
+
+          <div class="form-group mt-4">
+            <label for="nettingRunId">Netting Run ID:</label>
+            <input type="text" id="nettingRunId" class="text-input" value="NET-CYCLE-001">
+          </div>
+
+          <div class="btn-group mt-4">
+            <button class="btn btn-primary btn-block" id="proposeNettingBtn">Submit Netting Proposal</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="active-netting-proposals mt-6">
+        <h3>Active Netting Proposals & Executions</h3>
+        <div class="data-table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Netting ID</th>
+                <th>Initiator</th>
+                <th>Counterparty</th>
+                <th>Legs Count</th>
+                <th>Net Amount</th>
+                <th>Direction</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="nettingTableBody">
+              <tr><td colspan="8" class="empty-state">No active netting proposals found.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: DIRECT SETTLEMENT MONITOR -->
+    <section id="tab-settlement" class="tab-pane">
+      <div class="action-bar">
+        <h2>Direct Settlement Monitor</h2>
+        <p class="subtitle">External rail execution, RTGS/Fedwire dispatches, and failure recovery.</p>
+      </div>
+
+      <div class="data-table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Settlement ID</th>
+              <th>Obligation ID</th>
+              <th>Creditor</th>
+              <th>Debtor</th>
+              <th>Amount</th>
+              <th>Rail</th>
+              <th>Status</th>
+              <th>Tx Reference</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="settlementTableBody">
+            <tr><td colspan="9" class="empty-state">No active settlement instructions found.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 4: RECONCILIATION & AUDIT -->
+    <section id="tab-reconciliation" class="tab-pane">
+      <div class="action-bar">
+        <h2>Ledger vs. Read-Projection Reconciliation</h2>
+        <button class="btn btn-primary" id="runReconciliationBtn">⚡ Run Full Reconciliation</button>
+      </div>
+
+      <div id="reconciliationResultBox" class="panel mt-4 hidden">
+        <div class="reconciliation-summary">
+          <div class="rec-stat">
+            <span class="stat-label">Audit Timestamp:</span>
+            <span class="stat-value" id="recTimestamp">-</span>
+          </div>
+          <div class="rec-stat">
+            <span class="stat-label">PostgreSQL Projections:</span>
+            <span class="stat-value" id="recDbCount">0</span>
+          </div>
+          <div class="rec-stat">
+            <span class="stat-label">Canton Active Contracts:</span>
+            <span class="stat-value" id="recLedgerCount">0</span>
+          </div>
+          <div class="rec-stat">
+            <span class="stat-label">Balance Status:</span>
+            <span class="badge" id="recStatusBadge">BALANCED</span>
+          </div>
+        </div>
+
+        <div class="mt-4" id="discrepancySection">
+          <h4>Discrepancy Details</h4>
+          <div id="discrepancyList" class="discrepancy-list"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- CREATE OBLIGATION MODAL -->
+  <div id="createObligationModal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Propose New Financial Obligation</h3>
+        <button class="btn-close" id="closeCreateObligationModalBtn">&times;</button>
+      </div>
+      <form id="createObligationForm">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="newOblId">Obligation ID</label>
+            <input type="text" id="newOblId" class="text-input" placeholder="OBL-2026-001" required>
+          </div>
+          <div class="form-group">
+            <label for="newCreditor">Creditor (Payee)</label>
+            <select id="newCreditor" class="select-input" required>
+              <option value="BankB">Bank B</option>
+              <option value="BankA">Bank A</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="newDebtor">Debtor (Payer)</label>
+            <select id="newDebtor" class="select-input" required>
+              <option value="BankA">Bank A</option>
+              <option value="BankB">Bank B</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="newAmount">Amount (Safe Decimal)</label>
+            <input type="text" id="newAmount" class="text-input" placeholder="100000.00" required>
+          </div>
+          <div class="form-group">
+            <label for="newCurrency">Currency</label>
+            <select id="newCurrency" class="select-input">
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+              <option value="GBP">GBP</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="newDueDate">Due Date</label>
+            <input type="date" id="newDueDate" class="text-input" required>
+          </div>
+          <div class="form-group full-width">
+            <label for="newDescription">Description</label>
+            <input type="text" id="newDescription" class="text-input" placeholder="FX Hedge settlement / Invoice #998" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="cancelCreateModalBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Submit to Ledger</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

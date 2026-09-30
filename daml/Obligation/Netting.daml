@@ -1,0 +1,335 @@
+module Obligation.Netting where
+
+import Obligation.Types
+import Obligation.Contract
+import Governance.Policy
+
+-- ============================================================
+-- OBLIGAX
+-- BILATERAL NETTING ENGINE
+--
+-- Consumes multiple confirmed bilateral obligations between two
+-- institutions and replaces them atomically with an immutable
+-- NettingSettlement contract.
+--
+-- CRITICAL INVARIANT: NO PARTIAL NETTING.
+-- All obligations must be valid and confirmed, or the entire
+-- netting transaction fails and rolls back.
+-- ============================================================
+
+data NettingLine
+  = NettingLine
+    with
+      obligationId : Text
+      obligationCid : ContractId Obligation
+      creditor : Party
+      debtor : Party
+      amount : Decimal
+      currency : Currency
+    deriving (Eq, Show)
+
+template NettingProposal
+  with
+    nettingId : Text
+    initiator : Party
+    counterparty : Party
+    lines : [NettingLine]
+    terms : NettingTerms
+    status : NettingStatus
+    createdDate : Date
+    metadata : NettingMetadata
+  where
+    signatory
+      case status of
+        NettingProposed  -> [metadata.createdBy]
+        NettingAccepted  -> [metadata.createdBy, counterparty]
+        NettingRejected  -> [metadata.createdBy, counterparty]
+        NettingCancelled -> [metadata.createdBy, initiator]
+        _                -> [metadata.createdBy]
+
+    observer
+      case status of
+        NettingProposed  -> [initiator, counterparty]
+        NettingAccepted  -> [initiator]
+        NettingRejected  -> [initiator]
+        NettingCancelled -> [counterparty]
+        _                -> []
+
+    ensure
+      initiator /= counterparty
+        && nettingId /= ""
+        && length lines > 0
+        && terms.grossReceivable >= 0.0
+        && terms.grossPayable >= 0.0
+        && terms.netAmount > 0.0
+        && metadata.sourceSystem /= ""
+        && metadata.sourceReference /= ""
+        && metadata.businessUnit /= ""
+
+    -- --------------------------------------------------------
+    -- ACCEPT
+    -- --------------------------------------------------------
+    choice Accept : ContractId NettingProposal
+      controller counterparty
+      do
+        assertMsg "NET-001: Netting proposal must be in Proposed state." (status == NettingProposed)
+        create this with status = NettingAccepted
+
+    -- --------------------------------------------------------
+    -- REJECT
+    -- --------------------------------------------------------
+    choice Reject : ContractId NettingProposal
+      with
+        reason : Text
+      controller counterparty
+      do
+        assertMsg "NET-002: Rejection reason is required." (reason /= "")
+        assertMsg "NET-003: Netting proposal must be in Proposed state." (status == NettingProposed)
+        create this with status = NettingRejected
+
+    -- --------------------------------------------------------
+    -- CANCEL
+    -- --------------------------------------------------------
+    choice Cancel : ContractId NettingProposal
+      with
+        reason : Text
+      controller initiator
+      do
+        assertMsg "NET-004: Cancellation reason is required." (reason /= "")
+        assertMsg "NET-005: Only proposed netting can be cancelled." (status == NettingProposed)
+        create this with status = NettingCancelled
+
+    -- --------------------------------------------------------
+    -- EXECUTE NETTING (ATOMIC)
+    -- --------------------------------------------------------
+    choice Execute : ContractId NettingSettlement
+      controller initiator
+      do
+        assertMsg "NET-006: Netting proposal must be accepted." (status == NettingAccepted)
+        assertMsg "NET-007: Net amount must be positive." (terms.netAmount > 0.0)
+
+        -- Atomic validation and consumption of all participating obligations
+        validateAndConsumeLines
+          lines
+          initiator
+          counterparty
+          terms.currency
+
+        -- Create immutable netting settlement evidence
+        create NettingSettlement with
+          nettingId = nettingId
+          initiator = initiator
+          counterparty = counterparty
+          lines = lines
+          terms = terms
+          executedDate = createdDate
+          metadata = metadata
+
+-- ============================================================
+-- NETTING SETTLEMENT
+-- ============================================================
+
+template NettingSettlement
+  with
+    nettingId : Text
+    initiator : Party
+    counterparty : Party
+    lines : [NettingLine]
+    terms : NettingTerms
+    executedDate : Date
+    metadata : NettingMetadata
+  where
+    signatory initiator, counterparty
+    observer initiator, counterparty
+
+    ensure
+      nettingId /= ""
+        && length lines > 0
+        && terms.netAmount > 0.0
+        && metadata.sourceReference /= ""
+
+    choice CreateSettlementInstruction : ContractId NettingSettlementInstruction
+      with
+        settlementId : Text
+        settlementSystem : Text
+        settlementReference : Text
+        createdAt : Time
+      controller initiator
+      do
+        assertMsg "NET-008: Settlement ID is required." (settlementId /= "")
+        assertMsg "NET-009: Settlement system is required." (settlementSystem /= "")
+        assertMsg "NET-010: Settlement reference is required." (settlementReference /= "")
+
+        let (payerParty, payeeParty) = case terms.direction of
+              InitiatorPays    -> (initiator, counterparty)
+              CounterpartyPays -> (counterparty, initiator)
+
+        create NettingSettlementInstruction with
+          settlementId = settlementId
+          nettingId = nettingId
+          payer = payerParty
+          payee = payeeParty
+          amount = terms.netAmount
+          currency = terms.currency
+          status = NetSettlementCreated
+          metadata = SettlementMetadata with
+            settlementSystem = settlementSystem
+            settlementReference = settlementReference
+            createdAt = createdAt
+            createdBy = initiator
+
+-- ============================================================
+-- NETTING SETTLEMENT INSTRUCTION
+-- ============================================================
+
+template NettingSettlementInstruction
+  with
+    settlementId : Text
+    nettingId : Text
+    payer : Party
+    payee : Party
+    amount : Decimal
+    currency : Currency
+    status : NetSettlementStatus
+    metadata : SettlementMetadata
+  where
+    signatory payer, payee
+    observer payer, payee
+
+    ensure
+      payer /= payee
+        && settlementId /= ""
+        && nettingId /= ""
+        && amount > 0.0
+        && metadata.settlementReference /= ""
+
+    choice Start : ContractId NettingSettlementInstruction
+      controller payer
+      do
+        assertMsg "NET-011: Settlement must be in Created state." (status == NetSettlementCreated)
+        create this with status = NetSettlementProcessing
+
+    choice Complete : ContractId NettingSettlementInstruction
+      controller payer
+      do
+        assertMsg "NET-012: Settlement must be Processing." (status == NetSettlementProcessing)
+        create this with status = NetSettlementCompleted
+
+    choice Fail : ContractId NettingSettlementInstruction
+      with
+        reason : Text
+      controller payer
+      do
+        assertMsg "NET-013: Failure reason is required." (reason /= "")
+        assertMsg "NET-014: Settlement is already completed." (status /= NetSettlementCompleted)
+        create this with status = NetSettlementFailed
+
+-- ============================================================
+-- ATOMIC VALIDATION AND CONSUMPTION
+-- ============================================================
+
+validateAndConsumeLines
+    : [NettingLine]
+    -> Party
+    -> Party
+    -> Currency
+    -> Update ()
+validateAndConsumeLines lines initiator counterparty currency =
+  case lines of
+    [] -> pure ()
+    line :: remaining -> do
+      obligation <- fetch line.obligationCid
+
+      -- 1. Identity validation
+      assertMsg "NET-015: Obligation ID mismatch." (obligation.obligationId == line.obligationId)
+
+      -- 2. Bilateral participant validation
+      assertMsg "NET-016: Obligation counterparties outside netting set."
+        ((obligation.creditor == initiator && obligation.debtor == counterparty)
+          || (obligation.creditor == counterparty && obligation.debtor == initiator))
+
+      -- 3. Amount and currency validation
+      assertMsg "NET-017: Netting line amount mismatch." (obligation.amount == line.amount)
+      assertMsg "NET-018: Netting line creditor mismatch." (obligation.creditor == line.creditor)
+      assertMsg "NET-019: Netting line debtor mismatch." (obligation.debtor == line.debtor)
+      assertMsg "NET-020: Obligation currency does not match netting currency." (obligation.currency == currency)
+      assertMsg "NET-021: Netting line currency does not match obligation." (line.currency == obligation.currency)
+
+      -- 4. Status validation: must be Confirmed
+      assertMsg "NET-022: Only Confirmed obligations may be netted." (obligation.status == Confirmed)
+
+      -- 5. Transition to NettingPending, then CompleteNetting (Netted)
+      pendingCid <- exercise line.obligationCid PrepareForNetting
+      _ <- exercise pendingCid CompleteNetting
+
+      -- 6. Recurse through remaining lines atomically
+      validateAndConsumeLines remaining initiator counterparty currency
+
+-- ============================================================
+-- NETTING FACTORY
+-- ============================================================
+
+template NettingFactory
+  with
+    operator : Party
+    policyCid : ContractId ObligaXPolicy
+  where
+    signatory operator
+
+    nonconsuming choice CreateProposal : ContractId NettingProposal
+      with
+        nettingId : Text
+        initiator : Party
+        counterparty : Party
+        lines : [NettingLine]
+        grossReceivable : Decimal
+        grossPayable : Decimal
+        netAmount : Decimal
+        currency : Currency
+        createdDate : Date
+        sourceSystem : Text
+        sourceReference : Text
+        businessUnit : Text
+        createdAt : Time
+      controller operator
+      do
+        policy <- fetch policyCid
+
+        assertMsg "NET-023: ObligaX policy is inactive." policy.active
+        assertMsg "NET-024: Initiator and counterparty must differ." (initiator /= counterparty)
+        assertMsg "NET-025: Netting ID is required." (nettingId /= "")
+        assertMsg "NET-026: Netting set cannot be empty." (length lines > 0)
+        assertMsg "NET-027: Gross receivable cannot be negative." (grossReceivable >= 0.0)
+        assertMsg "NET-028: Gross payable cannot be negative." (grossPayable >= 0.0)
+        assertMsg "NET-029: Net amount must be greater than zero." (netAmount > 0.0)
+        assertMsg "NET-030: Net amount exceeds policy limit." (netAmount <= policy.maximumNettingAmount)
+        assertMsg "NET-031: Net amount inconsistent with gross values."
+          (netAmount == absDecimal (grossReceivable - grossPayable))
+        assertMsg "NET-032: Source system is required." (sourceSystem /= "")
+        assertMsg "NET-033: Source reference is required." (sourceReference /= "")
+        assertMsg "NET-034: Business unit is required." (businessUnit /= "")
+
+        let direction = if grossReceivable >= grossPayable then CounterpartyPays else InitiatorPays
+
+        create NettingProposal with
+          nettingId = nettingId
+          initiator = initiator
+          counterparty = counterparty
+          lines = lines
+          terms = NettingTerms with
+            grossReceivable = grossReceivable
+            grossPayable = grossPayable
+            netAmount = netAmount
+            currency = currency
+            direction = direction
+          status = NettingProposed
+          createdDate = createdDate
+          metadata = NettingMetadata with
+            sourceSystem = sourceSystem
+            sourceReference = sourceReference
+            createdBy = operator
+            createdAt = createdAt
+            businessUnit = businessUnit
+
+absDecimal : Decimal -> Decimal
+absDecimal val = if val < 0.0 then -val else val

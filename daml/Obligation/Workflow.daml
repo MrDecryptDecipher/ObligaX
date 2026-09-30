@@ -1,0 +1,429 @@
+module Obligation.Workflow where
+
+import Obligation.Types
+import Obligation.Contract
+import Settlement.Settlement
+
+-- ============================================================
+-- OBLIGAX
+-- OBLIGATION WORKFLOW
+--
+-- Bilateral workflow orchestration coordination layer.
+-- ============================================================
+
+data WorkflowStatus
+    = WorkflowCreated
+    | WorkflowAccepted
+    | WorkflowConfirmed
+    | WorkflowAmendmentPending
+    | WorkflowDisputePending
+    | WorkflowSettlementPending
+    | WorkflowNettingPending
+    | WorkflowCompleted
+    | WorkflowCancelled
+    deriving (Eq, Ord, Show)
+
+data WorkflowType
+    = StandardObligation
+    | AmendedObligation
+    | DisputedObligation
+    | DirectSettlement
+    | NettingWorkflow
+    deriving (Eq, Ord, Show)
+
+data WorkflowMetadata
+    = WorkflowMetadata
+    with
+      sourceSystem : Text
+      sourceReference : Text
+      businessUnit : Text
+      createdBy : Party
+      createdAt : Time
+    deriving (Eq, Show)
+
+template ObligationWorkflow
+  with
+    workflowId : Text
+    workflowType : WorkflowType
+    obligationCid : ContractId Obligation
+    creditor : Party
+    debtor : Party
+    status : WorkflowStatus
+    metadata : WorkflowMetadata
+  where
+    signatory
+      case status of
+        WorkflowCreated  -> [metadata.createdBy]
+        WorkflowAccepted -> [metadata.createdBy, debtor]
+        _                -> [creditor, debtor]
+
+    observer
+      case status of
+        WorkflowCreated  -> [creditor, debtor]
+        WorkflowAccepted -> [creditor]
+        _                -> []
+
+    ensure
+      workflowId /= ""
+        && creditor /= debtor
+        && metadata.sourceSystem /= ""
+        && metadata.sourceReference /= ""
+        && metadata.businessUnit /= ""
+
+    -- --------------------------------------------------------
+    -- ACCEPT WORKFLOW
+    -- --------------------------------------------------------
+    choice AcceptWorkflow : ContractId ObligationWorkflow
+      controller debtor
+      do
+        obligation <- fetch obligationCid
+        assertMsg "WF-001: Workflow obligation parties do not match."
+          (obligation.creditor == creditor && obligation.debtor == debtor)
+        assertMsg "WF-002: Obligation must be Proposed."
+          (obligation.status == Proposed)
+
+        acceptedCid <- exercise obligationCid AcceptObligation
+
+        create this with
+          obligationCid = acceptedCid
+          status = WorkflowAccepted
+
+    -- --------------------------------------------------------
+    -- CONFIRM WORKFLOW
+    -- --------------------------------------------------------
+    choice ConfirmWorkflow : ContractId ObligationWorkflow
+      controller creditor
+      do
+        obligation <- fetch obligationCid
+        assertMsg "WF-003: Workflow obligation parties do not match."
+          (obligation.creditor == creditor && obligation.debtor == debtor)
+        assertMsg "WF-004: Obligation must be Accepted."
+          (obligation.status == Accepted)
+
+        confirmedCid <- exercise obligationCid ConfirmObligation
+
+        create this with
+          obligationCid = confirmedCid
+          status = WorkflowConfirmed
+
+    -- --------------------------------------------------------
+    -- CANCEL WORKFLOW
+    -- --------------------------------------------------------
+    choice CancelWorkflow : ContractId ObligationWorkflow
+      with
+        cancellationReason : Text
+      controller creditor
+      do
+        assertMsg "WF-005: Cancellation reason is required." (cancellationReason /= "")
+
+        obligation <- fetch obligationCid
+        assertMsg "WF-006: Workflow obligation parties do not match."
+          (obligation.creditor == creditor && obligation.debtor == debtor)
+
+        cancelledCid <- exercise obligationCid CancelObligation with
+          cancellationReason = cancellationReason
+
+        create this with
+          obligationCid = cancelledCid
+          status = WorkflowCancelled
+
+    -- --------------------------------------------------------
+    -- START SETTLEMENT WORKFLOW
+    -- --------------------------------------------------------
+    choice StartSettlementWorkflow :
+        (ContractId ObligationWorkflow, ContractId SettlementInstruction)
+      with
+        settlementId : Text
+        settlementSystem : Text
+        settlementReference : Text
+        createdAt : Time
+      controller creditor
+      do
+        assertMsg "WF-008: Settlement ID is required." (settlementId /= "")
+        assertMsg "WF-009: Settlement system is required." (settlementSystem /= "")
+        assertMsg "WF-010: Settlement reference is required." (settlementReference /= "")
+
+        obligation <- fetch obligationCid
+        assertMsg "WF-011: Workflow obligation parties do not match."
+          (obligation.creditor == creditor && obligation.debtor == debtor)
+        assertMsg "WF-012: Only Confirmed obligations can enter settlement."
+          (obligation.status == Confirmed)
+
+        pendingCid <- exercise obligationCid EnterSettlementPending
+
+        settlementCid <- create SettlementInstruction with
+          settlementId = settlementId
+          obligationId = obligation.obligationId
+          obligationCid = pendingCid
+          creditor = creditor
+          debtor = debtor
+          amount = obligation.amount
+          currency = obligation.currency
+          status = SettlementCreated
+          requestMetadata = SettlementRequestMetadata with
+            sourceSystem = settlementSystem
+            sourceReference = settlementReference
+            settlementRail = BankPaymentRail
+            createdAt = createdAt
+            createdBy = creditor
+          executionMetadata = None
+          failureMetadata = None
+
+        workflowCid <- create this with
+          obligationCid = pendingCid
+          status = WorkflowSettlementPending
+
+        return (workflowCid, settlementCid)
+
+    -- --------------------------------------------------------
+    -- FINALIZE SETTLEMENT WORKFLOW
+    -- --------------------------------------------------------
+    choice FinalizeSettlementWorkflow : ContractId ObligationWorkflow
+      controller creditor
+      do
+        obligation <- fetch obligationCid
+        assertMsg "WF-013: Obligation must be SettlementPending."
+          (obligation.status == SettlementPending)
+
+        settledCid <- exercise obligationCid FinalizeSettlement
+
+        create this with
+          obligationCid = settledCid
+          status = WorkflowCompleted
+
+    -- --------------------------------------------------------
+    -- REOPEN SETTLEMENT WORKFLOW
+    -- --------------------------------------------------------
+    choice ReopenSettlementWorkflow : ContractId ObligationWorkflow
+      controller creditor
+      do
+        obligation <- fetch obligationCid
+        assertMsg "WF-014: Obligation must be SettlementPending."
+          (obligation.status == SettlementPending)
+
+        reopenedCid <- exercise obligationCid ReopenAfterSettlementFailure
+
+        create this with
+          obligationCid = reopenedCid
+          status = WorkflowConfirmed
+
+    -- --------------------------------------------------------
+    -- START NETTING WORKFLOW
+    -- --------------------------------------------------------
+    choice StartNettingWorkflow : ContractId ObligationWorkflow
+      controller creditor
+      do
+        obligation <- fetch obligationCid
+        assertMsg "WF-015: Workflow obligation parties do not match."
+          (obligation.creditor == creditor && obligation.debtor == debtor)
+        assertMsg "WF-016: Only Confirmed obligations can enter netting."
+          (obligation.status == Confirmed)
+
+        nettingCid <- exercise obligationCid PrepareForNetting
+
+        create this with
+          obligationCid = nettingCid
+          status = WorkflowNettingPending
+
+    -- --------------------------------------------------------
+    -- REOPEN NETTING WORKFLOW
+    -- --------------------------------------------------------
+    choice ReopenNettingWorkflow : ContractId ObligationWorkflow
+      controller creditor
+      do
+        obligation <- fetch obligationCid
+        assertMsg "WF-017: Obligation must be NettingPending."
+          (obligation.status == NettingPending)
+
+        reopenedCid <- exercise obligationCid ReopenAfterNettingFailure
+
+        create this with
+          obligationCid = reopenedCid
+          status = WorkflowConfirmed
+
+    -- --------------------------------------------------------
+    -- COMPLETE SINGLE NETTING WORKFLOW
+    -- --------------------------------------------------------
+    choice CompleteSingleNettingWorkflow : ContractId ObligationWorkflow
+      controller creditor
+      do
+        obligation <- fetch obligationCid
+        assertMsg "WF-018: Obligation must be NettingPending."
+          (obligation.status == NettingPending)
+
+        nettedCid <- exercise obligationCid CompleteNetting
+
+        create this with
+          obligationCid = nettedCid
+          status = WorkflowCompleted
+
+    -- --------------------------------------------------------
+    -- RAISE DISPUTE WORKFLOW
+    -- --------------------------------------------------------
+    choice RaiseDisputeWorkflow :
+        (ContractId ObligationWorkflow, ContractId Dispute)
+      with
+        reason : DisputeReason
+        details : Text
+      controller debtor
+      do
+        assertMsg "WF-019: Dispute details are required." (details /= "")
+
+        obligation <- fetch obligationCid
+        assertMsg "WF-020: Workflow obligation parties do not match."
+          (obligation.creditor == creditor && obligation.debtor == debtor)
+        assertMsg "WF-021: Obligation cannot be disputed from its current state."
+          (obligation.status == Confirmed)
+
+        (disputedCid, disputeCid) <- exercise obligationCid RaiseDispute with
+          reason = reason
+          details = details
+
+        workflowCid <- create this with
+          obligationCid = disputedCid
+          status = WorkflowDisputePending
+
+        return (workflowCid, disputeCid)
+
+    -- --------------------------------------------------------
+    -- CLEAR DISPUTE WORKFLOW
+    -- --------------------------------------------------------
+    choice ClearDisputeWorkflow : ContractId ObligationWorkflow
+      with
+        disputeCid : ContractId Dispute
+      controller creditor
+      do
+        obligation <- fetch obligationCid
+        assertMsg "WF-022: Obligation must be Disputed."
+          (obligation.status == Disputed)
+
+        dispute <- fetch disputeCid
+        assertMsg "WF-023: Dispute does not belong to this obligation."
+          (dispute.obligationId == obligation.obligationId)
+        assertMsg "WF-024: Dispute must be resolved or rejected."
+          (dispute.status == DisputeResolved || dispute.status == DisputeRejected)
+
+        confirmedCid <- exercise obligationCid ClearDispute with
+          disputeCid = disputeCid
+
+        create this with
+          obligationCid = confirmedCid
+          status = WorkflowConfirmed
+
+    -- --------------------------------------------------------
+    -- START AMOUNT AMENDMENT WORKFLOW
+    -- --------------------------------------------------------
+    choice StartAmountAmendmentWorkflow :
+        (ContractId ObligationWorkflow, ContractId Amendment)
+      with
+        newAmount : Decimal
+        reason : Text
+      controller creditor
+      do
+        assertMsg "WF-025: New amount must be greater than zero." (newAmount > 0.0)
+        assertMsg "WF-026: Amendment reason is required." (reason /= "")
+
+        obligation <- fetch obligationCid
+        assertMsg "WF-027: Obligation must be Confirmed." (obligation.status == Confirmed)
+
+        (pendingCid, amendmentCid) <- exercise obligationCid ProposeAmountAmendment with
+          newAmount = newAmount
+          reason = reason
+
+        workflowCid <- create this with
+          obligationCid = pendingCid
+          status = WorkflowAmendmentPending
+
+        return (workflowCid, amendmentCid)
+
+    -- --------------------------------------------------------
+    -- START DUE DATE AMENDMENT WORKFLOW
+    -- --------------------------------------------------------
+    choice StartDueDateAmendmentWorkflow :
+        (ContractId ObligationWorkflow, ContractId Amendment)
+      with
+        newDueDate : Date
+        reason : Text
+      controller creditor
+      do
+        assertMsg "WF-028: Amendment reason is required." (reason /= "")
+
+        obligation <- fetch obligationCid
+        assertMsg "WF-029: Obligation must be Confirmed." (obligation.status == Confirmed)
+        assertMsg "WF-030: New due date cannot precede creation date."
+          (newDueDate >= obligation.createdDate)
+
+        (pendingCid, amendmentCid) <- exercise obligationCid ProposeDueDateAmendment with
+          newDueDate = newDueDate
+          reason = reason
+
+        workflowCid <- create this with
+          obligationCid = pendingCid
+          status = WorkflowAmendmentPending
+
+        return (workflowCid, amendmentCid)
+
+    -- --------------------------------------------------------
+    -- CLEAR AMENDMENT WORKFLOW
+    -- --------------------------------------------------------
+    choice ClearAmendmentWorkflow : ContractId ObligationWorkflow
+      controller creditor
+      do
+        obligation <- fetch obligationCid
+        assertMsg "WF-031: Obligation must be AmendmentPending."
+          (obligation.status == AmendmentPending)
+
+        confirmedCid <- exercise obligationCid ClearAmendment
+
+        create this with
+          obligationCid = confirmedCid
+          status = WorkflowConfirmed
+
+-- ============================================================
+-- WORKFLOW FACTORY
+-- ============================================================
+
+template WorkflowFactory
+  with
+    operator : Party
+  where
+    signatory operator
+
+    choice CreateWorkflow : ContractId ObligationWorkflow
+      with
+        workflowId : Text
+        workflowType : WorkflowType
+        obligationCid : ContractId Obligation
+        creditor : Party
+        debtor : Party
+        createdAt : Time
+        sourceSystem : Text
+        sourceReference : Text
+        businessUnit : Text
+      controller operator
+      do
+        assertMsg "WF-032: Workflow ID is required." (workflowId /= "")
+        assertMsg "WF-033: Creditor and debtor must be different." (creditor /= debtor)
+        assertMsg "WF-034: Source system is required." (sourceSystem /= "")
+        assertMsg "WF-035: Source reference is required." (sourceReference /= "")
+        assertMsg "WF-036: Business unit is required." (businessUnit /= "")
+
+        obligation <- fetch obligationCid
+        assertMsg "WF-037: Obligation creditor does not match workflow."
+          (obligation.creditor == creditor)
+        assertMsg "WF-038: Obligation debtor does not match workflow."
+          (obligation.debtor == debtor)
+
+        create ObligationWorkflow with
+          workflowId = workflowId
+          workflowType = workflowType
+          obligationCid = obligationCid
+          creditor = creditor
+          debtor = debtor
+          status = WorkflowCreated
+          metadata = WorkflowMetadata with
+            sourceSystem = sourceSystem
+            sourceReference = sourceReference
+            businessUnit = businessUnit
+            createdBy = operator
+            createdAt = createdAt

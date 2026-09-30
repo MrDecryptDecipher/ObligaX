@@ -1,0 +1,157 @@
+module Main where
+
+-- ============================================================
+-- OBLIGAX
+-- ROOT / COMPOSITION MODULE
+--
+-- Main.daml is intentionally kept thin.
+--
+-- It provides the single root module for the ObligaX DAML
+-- application and imports the domain modules that constitute
+-- the production ledger model.
+--
+-- BUSINESS LOGIC MUST REMAIN IN THE DOMAIN MODULES.
+--
+-- Main.daml should NOT contain:
+--
+-- * obligation lifecycle logic
+-- * netting calculations
+-- * settlement logic
+-- * participant authorization logic
+-- * dispute logic
+-- * amendment logic
+-- * policy implementation
+--
+-- Those responsibilities belong to their respective modules.
+-- ============================================================
+
+
+
+-- ============================================================
+-- SHARED DOMAIN MODEL
+-- ============================================================
+
+import Obligation.Types
+
+
+
+-- ============================================================
+-- OBLIGATION DOMAIN
+--
+-- Contains:
+--
+-- * Obligation
+-- * ObligationFactory
+-- * obligation lifecycle choices
+-- * amendment coordination
+-- * dispute coordination
+-- * settlement transition coordination
+-- * netting transition coordination
+-- ============================================================
+
+import Obligation.Contract
+
+
+
+-- ============================================================
+-- OBLIGATION WORKFLOW
+--
+-- Higher-level bilateral workflow orchestration.
+-- ============================================================
+
+import Obligation.Workflow
+
+
+
+-- ============================================================
+-- NETTING DOMAIN
+--
+-- Contains:
+--
+-- * netting proposal
+-- * netting validation
+-- * participating obligations
+-- * atomic netting execution
+-- * NettingSettlement
+--
+-- NOTE:
+-- Obligation.Netting must be present in the project before
+-- compiling this root module.
+-- ============================================================
+
+import Obligation.Netting
+
+
+
+-- ============================================================
+-- SETTLEMENT DOMAIN
+--
+-- Contains:
+--
+-- * SettlementInstruction
+-- * settlement processing
+-- * settlement completion
+-- * settlement failure
+-- * settlement retry
+-- ============================================================
+
+import Settlement.Settlement
+
+
+
+-- ============================================================
+-- PARTICIPANT GOVERNANCE
+--
+-- Contains:
+--
+-- * participant registration
+-- * participant status
+-- * participant capabilities
+-- * participant limits
+-- * participant governance registry
+-- ============================================================
+
+import Governance.Participant
+
+
+
+-- ============================================================
+-- GOVERNANCE POLICY
+--
+-- The policy module is the authoritative location for:
+--
+-- * supported currencies
+-- * obligation limits
+-- * netting limits
+-- * settlement limits
+-- * network activation
+-- * governance controls
+--
+-- Contract.daml currently expects:
+--
+--     ObligaXPolicy
+--
+-- therefore Governance.Policy must define that template/type.
+-- ============================================================
+
+import Governance.Policy
+
+
+
+-- ============================================================
+-- FUTURE DOMAIN MODULES
+--
+-- These should be imported only after their implementation
+-- exists.
+--
+-- Planned production modules:
+--
+-- import Obligation.Amendment
+-- import Obligation.Dispute
+-- import Settlement.Rail
+-- import Governance.Audit
+-- import Governance.Role
+--
+-- Keeping these concerns separate prevents Main.daml from
+-- becoming a business-logic dumping ground.
+-- ============================================================

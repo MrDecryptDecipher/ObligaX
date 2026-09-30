@@ -1,0 +1,281 @@
+module Governance.Participant where
+
+import DA.Date (date, Month(..))
+import Obligation.Types
+
+-- ============================================================
+-- OBLIGAX
+-- PARTICIPANT GOVERNANCE
+--
+-- Network participant governance registry and business lifecycle.
+-- ============================================================
+
+data ParticipantStatus
+    = ParticipantPending
+    | ParticipantActive
+    | ParticipantSuspended
+    | ParticipantRestricted
+    | ParticipantRetired
+    deriving (Eq, Ord, Show)
+
+data ParticipantRole
+    = Issuer
+    | ObligationCounterparty
+    | SettlementParticipant
+    | NettingParticipant
+    | SettlementOperator
+    | ComplianceOperator
+    | NetworkOperator
+    deriving (Eq, Ord, Show)
+
+data ParticipantTier
+    = Tier1
+    | Tier2
+    | Tier3
+    deriving (Eq, Ord, Show)
+
+data ParticipantMetadata
+    = ParticipantMetadata
+    with
+      legalName : Text
+      legalEntityIdentifier : Text
+      jurisdiction : Text
+      businessUnit : Text
+      sourceSystem : Text
+      registeredAt : Time
+      registeredBy : Party
+    deriving (Eq, Show)
+
+data ParticipantLimits
+    = ParticipantLimits
+    with
+      maximumObligationAmount : Decimal
+      maximumDailyGrossVolume : Decimal
+      maximumNettingAmount : Decimal
+    deriving (Eq, Show)
+
+data ParticipantCapabilities
+    = ParticipantCapabilities
+    with
+      canCreateObligations : Bool
+      canAcceptObligations : Bool
+      canConfirmObligations : Bool
+      canInitiateNetting : Bool
+      canParticipateInNetting : Bool
+      canInitiateSettlement : Bool
+      canProcessSettlement : Bool
+      canResolveDisputes : Bool
+      canProposeAmendments : Bool
+    deriving (Eq, Show)
+
+template ParticipantRegistration
+  with
+    networkOperator : Party
+    participantId : Text
+    participant : Party
+    participantName : Text
+    tier : ParticipantTier
+    roles : [ParticipantRole]
+    status : ParticipantStatus
+    supportedCurrencies : [Currency]
+    limits : ParticipantLimits
+    capabilities : ParticipantCapabilities
+    metadata : ParticipantMetadata
+  where
+    signatory networkOperator
+    observer participant
+
+    ensure
+      participantId /= ""
+        && participantName /= ""
+        && metadata.legalName /= ""
+        && metadata.legalEntityIdentifier /= ""
+        && metadata.jurisdiction /= ""
+        && metadata.businessUnit /= ""
+        && metadata.sourceSystem /= ""
+        && limits.maximumObligationAmount > 0.0
+        && limits.maximumDailyGrossVolume > 0.0
+        && limits.maximumNettingAmount > 0.0
+        && supportedCurrencies /= []
+        && roles /= []
+
+    choice ActivateParticipant : ContractId ParticipantRegistration
+      controller participant
+      do
+        assertMsg "GOV-P-001: Participant must be Pending." (status == ParticipantPending)
+        assertMsg "GOV-P-002: Participant must have at least one role." (roles /= [])
+        assertMsg "GOV-P-003: Participant must support at least one currency." (supportedCurrencies /= [])
+        create this with status = ParticipantActive
+
+    choice SuspendParticipant : ContractId ParticipantRegistration
+      with
+        reason : Text
+      controller networkOperator
+      do
+        assertMsg "GOV-P-004: Suspension reason is required." (reason /= "")
+        assertMsg "GOV-P-005: Participant is already suspended." (status /= ParticipantSuspended)
+        assertMsg "GOV-P-006: Retired participants cannot be suspended." (status /= ParticipantRetired)
+        create this with status = ParticipantSuspended
+
+    choice RestrictParticipant : ContractId ParticipantRegistration
+      with
+        reason : Text
+      controller networkOperator
+      do
+        assertMsg "GOV-P-007: Restriction reason is required." (reason /= "")
+        assertMsg "GOV-P-008: Retired participant cannot be restricted." (status /= ParticipantRetired)
+        create this with status = ParticipantRestricted
+
+    choice ReactivateParticipant : ContractId ParticipantRegistration
+      controller networkOperator
+      do
+        assertMsg "GOV-P-009: Participant must be Suspended or Restricted."
+          (status == ParticipantSuspended || status == ParticipantRestricted)
+        create this with status = ParticipantActive
+
+    choice RetireParticipant : ContractId ParticipantRegistration
+      with
+        reason : Text
+      controller networkOperator
+      do
+        assertMsg "GOV-P-010: Retirement reason is required." (reason /= "")
+        assertMsg "GOV-P-011: Participant is already retired." (status /= ParticipantRetired)
+        create this with status = ParticipantRetired
+
+template ParticipantAuthorization
+  with
+    participant : Party
+    participantRegistrationCid : ContractId ParticipantRegistration
+    capabilities : ParticipantCapabilities
+    effectiveFrom : Date
+    grantedAt : Time
+    grantedBy : Party
+  where
+    signatory participant
+    observer grantedBy
+
+    ensure
+      effectiveFrom /= date 1970 Jan 1
+
+    choice ReplaceAuthorization : ContractId ParticipantAuthorization
+      with
+        newCapabilities : ParticipantCapabilities
+      controller participant
+      do
+        registration <- fetch participantRegistrationCid
+        assertMsg "GOV-P-012: Authorization participant does not match registration."
+          (registration.participant == participant)
+        assertMsg "GOV-P-013: Participant must be Active."
+          (registration.status == ParticipantActive)
+        create this with capabilities = newCapabilities
+
+template ParticipantRegistry
+  with
+    networkOperator : Party
+    registryId : Text
+    networkName : Text
+    governanceVersion : Int
+    active : Bool
+  where
+    signatory networkOperator
+
+    ensure
+      registryId /= ""
+        && networkName /= ""
+        && governanceVersion >= 1
+
+    nonconsuming choice RegisterParticipant : ContractId ParticipantRegistration
+      with
+        participant : Party
+        participantId : Text
+        participantName : Text
+        tier : ParticipantTier
+        roles : [ParticipantRole]
+        supportedCurrencies : [Currency]
+        limits : ParticipantLimits
+        capabilities : ParticipantCapabilities
+        legalName : Text
+        legalEntityIdentifier : Text
+        jurisdiction : Text
+        businessUnit : Text
+        sourceSystem : Text
+        registeredAt : Time
+      controller networkOperator
+      do
+        assertMsg "GOV-P-014: Participant registry is inactive." active
+        assertMsg "GOV-P-015: Participant ID is required." (participantId /= "")
+        assertMsg "GOV-P-016: Participant name is required." (participantName /= "")
+        assertMsg "GOV-P-017: Legal name is required." (legalName /= "")
+        assertMsg "GOV-P-018: LEI is required." (legalEntityIdentifier /= "")
+        assertMsg "GOV-P-019: Jurisdiction is required." (jurisdiction /= "")
+        assertMsg "GOV-P-020: Business unit is required." (businessUnit /= "")
+        assertMsg "GOV-P-021: Source system is required." (sourceSystem /= "")
+        assertMsg "GOV-P-022: At least one participant role is required." (roles /= [])
+        assertMsg "GOV-P-023: At least one supported currency is required." (supportedCurrencies /= [])
+        assertMsg "GOV-P-024: Maximum obligation amount must be positive." (limits.maximumObligationAmount > 0.0)
+        assertMsg "GOV-P-025: Maximum daily gross volume must be positive." (limits.maximumDailyGrossVolume > 0.0)
+        assertMsg "GOV-P-026: Maximum netting amount must be positive." (limits.maximumNettingAmount > 0.0)
+
+        create ParticipantRegistration with
+          networkOperator = networkOperator
+          participantId = participantId
+          participant = participant
+          participantName = participantName
+          tier = tier
+          roles = roles
+          status = ParticipantPending
+          supportedCurrencies = supportedCurrencies
+          limits = limits
+          capabilities = capabilities
+          metadata = ParticipantMetadata with
+            legalName = legalName
+            legalEntityIdentifier = legalEntityIdentifier
+            jurisdiction = jurisdiction
+            businessUnit = businessUnit
+            sourceSystem = sourceSystem
+            registeredAt = registeredAt
+            registeredBy = networkOperator
+
+    choice DeactivateRegistry : ContractId ParticipantRegistry
+      controller networkOperator
+      do
+        assertMsg "GOV-P-027: Registry is already inactive." active
+        create this with active = False
+
+    choice ActivateRegistry : ContractId ParticipantRegistry
+      controller networkOperator
+      do
+        assertMsg "GOV-P-028: Registry is already active." (not active)
+        create this with active = True
+
+    choice UpgradeGovernanceVersion : ContractId ParticipantRegistry
+      with
+        newVersion : Int
+      controller networkOperator
+      do
+        assertMsg "GOV-P-029: Governance version must increase." (newVersion > governanceVersion)
+        create this with governanceVersion = newVersion
+
+template ParticipantGovernanceFactory
+  with
+    networkOperator : Party
+  where
+    signatory networkOperator
+
+    nonconsuming choice CreateRegistry : ContractId ParticipantRegistry
+      with
+        registryId : Text
+        networkName : Text
+        governanceVersion : Int
+      controller networkOperator
+      do
+        assertMsg "GOV-P-030: Registry ID is required." (registryId /= "")
+        assertMsg "GOV-P-031: Network name is required." (networkName /= "")
+        assertMsg "GOV-P-032: Governance version must be positive." (governanceVersion >= 1)
+
+        create ParticipantRegistry with
+          networkOperator = networkOperator
+          registryId = registryId
+          networkName = networkName
+          governanceVersion = governanceVersion
+          active = True

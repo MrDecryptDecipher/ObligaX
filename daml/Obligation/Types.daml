@@ -1,0 +1,465 @@
+module Obligation.Types where
+
+
+
+-- ============================================================
+-- OBLIGAX
+-- SHARED DOMAIN TYPES
+--
+-- This module intentionally contains:
+--
+-- * Enumerations
+-- * Value types
+-- * Lifecycle states
+-- * Operational metadata
+--
+-- It does NOT contain:
+--
+-- * Templates
+-- * Choices
+-- * Ledger workflows
+-- * Network-specific logic
+--
+-- This keeps the domain model reusable by:
+--
+-- Obligation.Contract
+-- Obligation.Netting
+-- Obligation.Workflow
+-- Settlement
+-- Dispute
+-- Testing
+-- API integration
+-- ============================================================
+
+
+
+-- ============================================================
+-- CURRENCY
+--
+-- Supported settlement/accounting currencies in the initial
+-- ObligaX network.
+--
+-- Additional currencies can be introduced through a controlled
+-- software/network upgrade.
+-- ============================================================
+
+data Currency
+    = USD
+    | EUR
+    | GBP
+    | INR
+    | JPY
+    | CHF
+    | SGD
+    | AUD
+    | CAD
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- OBLIGATION STATUS
+--
+-- Canonical lifecycle of an ObligaX obligation.
+--
+-- Proposed
+--     ↓
+-- Accepted
+--     ↓
+-- Confirmed
+--     ├───────────────┐
+--     │               │
+--     ↓               ↓
+-- SettlementPending  NettingPending
+--     ↓               ↓
+-- Settled            Netted
+--
+-- Confirmed
+--     ↓
+-- Disputed
+--     ↓
+-- Confirmed
+--
+-- Confirmed
+--     ↓
+-- AmendmentPending
+--     ↓
+-- Confirmed
+--
+-- Cancelled is terminal.
+-- Settled is terminal.
+-- Netted is terminal.
+-- ============================================================
+
+data ObligationStatus
+    = Proposed
+    | Accepted
+    | Confirmed
+    | AmendmentPending
+    | NettingPending
+    | SettlementPending
+    | Disputed
+    | Settled
+    | Netted
+    | Cancelled
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- SETTLEMENT STATUS
+--
+-- Lifecycle of a direct settlement instruction.
+-- ============================================================
+
+data SettlementStatus
+    = SettlementCreated
+    | SettlementProcessing
+    | SettlementCompleted
+    | SettlementFailed
+    | SettlementCancelled
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- NETTING STATUS
+--
+-- Lifecycle of a bilateral netting proposal.
+-- ============================================================
+
+data NettingStatus
+    = NettingProposed
+    | NettingAccepted
+    | NettingExecuting
+    | NettingCompleted
+    | NettingRejected
+    | NettingFailed
+    | NettingCancelled
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- NETTING SETTLEMENT STATUS
+--
+-- Lifecycle after economic netting has completed and the
+-- resulting net obligation is sent to a settlement rail.
+-- ============================================================
+
+data NetSettlementStatus
+    = NetSettlementCreated
+    | NetSettlementProcessing
+    | NetSettlementCompleted
+    | NetSettlementFailed
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- DISPUTE STATUS
+-- ============================================================
+
+data DisputeStatus
+    = DisputeOpen
+    | DisputeUnderReview
+    | DisputeResolved
+    | DisputeRejected
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- AMENDMENT STATUS
+-- ============================================================
+
+data AmendmentStatus
+    = AmendmentProposed
+    | AmendmentAccepted
+    | AmendmentRejected
+    | AmendmentApplied
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- OBLIGATION PRIORITY
+--
+-- Used for operational prioritization.
+--
+-- Priority does NOT change the economic amount or legal
+-- validity of an obligation.
+-- ============================================================
+
+data ObligationPriority
+    = Normal
+    | High
+    | Critical
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- DISPUTE REASON
+-- ============================================================
+
+data DisputeReason
+    = IncorrectAmount
+    | IncorrectCurrency
+    | IncorrectDueDate
+    | DuplicateObligation
+    | UnauthorizedObligation
+    | IncorrectCounterparty
+    | SettlementFailure
+    | NettingError
+    | ContractualDisagreement
+    | OtherReason
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- AMENDMENT FIELD
+--
+-- Identifies the commercial attribute being amended.
+-- ============================================================
+
+data AmendmentField
+    = AmendmentAmount
+    | AmendmentDueDate
+    | AmendmentDescription
+    | AmendmentPriority
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- NETTING DIRECTION
+--
+-- Determines which participant owes the resulting net amount.
+-- ============================================================
+
+data NettingDirection
+    = InitiatorPays
+    | CounterpartyPays
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- OBLIGATION METADATA
+--
+-- Operational provenance.
+--
+-- This metadata is NOT the economic obligation itself.
+-- It allows ObligaX to correlate ledger state with an
+-- institution's source systems.
+-- ============================================================
+
+data ObligationMetadata
+    = ObligationMetadata
+    with
+
+      sourceSystem : Text
+
+      sourceReference : Text
+
+      businessUnit : Text
+
+      createdBy : Party
+
+      createdAt : Time
+
+      version : Int
+
+    deriving (Eq, Show)
+
+
+
+-- ============================================================
+-- SETTLEMENT METADATA
+--
+-- Identifies the external settlement system and reference.
+--
+-- Examples:
+--
+-- * RTGS reference
+-- * payment rail reference
+-- * securities settlement reference
+-- * internal treasury reference
+-- ============================================================
+
+data SettlementMetadata
+    = SettlementMetadata
+    with
+
+      settlementSystem : Text
+
+      settlementReference : Text
+
+      createdAt : Time
+
+      createdBy : Party
+
+    deriving (Eq, Show)
+
+
+
+-- ============================================================
+-- NETTING METADATA
+--
+-- Provenance of the netting calculation/proposal.
+-- ============================================================
+
+data NettingMetadata
+    = NettingMetadata
+    with
+
+      sourceSystem : Text
+
+      sourceReference : Text
+
+      createdBy : Party
+
+      createdAt : Time
+
+      businessUnit : Text
+
+    deriving (Eq, Show)
+
+
+
+-- ============================================================
+-- NETTING TERMS
+--
+-- Immutable economic result of a netting calculation.
+--
+-- Example:
+--
+-- Gross receivable = 140
+-- Gross payable    = 70
+-- Net amount       = 70
+-- Direction        = InitiatorPays
+-- ============================================================
+
+data NettingTerms
+    = NettingTerms
+    with
+
+      grossReceivable : Decimal
+
+      grossPayable : Decimal
+
+      netAmount : Decimal
+
+      currency : Currency
+
+      direction : NettingDirection
+
+    deriving (Eq, Show)
+
+
+
+-- ============================================================
+-- NETTING LINE
+--
+-- Shared representation of an obligation participating in
+-- a netting set.
+--
+-- The actual ContractId is intentionally NOT included here.
+--
+-- Reason:
+--
+-- Types.daml should remain independent from specific templates.
+--
+-- The concrete NettingLine containing:
+--
+-- ContractId Obligation
+--
+-- belongs in Obligation.Netting.
+-- ============================================================
+
+
+
+-- ============================================================
+-- AUDIT ACTION
+--
+-- Standardized business-level action classification.
+--
+-- This is useful for event processors, analytics, audit
+-- pipelines and operational dashboards.
+--
+-- It does not replace the Canton transaction history.
+-- ============================================================
+
+data AuditAction
+    = ObligationCreated
+    | ObligationAccepted
+    | ObligationConfirmed
+    | ObligationAmended
+    | ObligationDisputed
+    | ObligationDisputeResolved
+    | ObligationPreparedForNetting
+    | ObligationNetted
+    | AuditSettlementCreated
+    | AuditSettlementStarted
+    | AuditSettlementCompleted
+    | AuditSettlementFailed
+    | ObligationCancelled
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- SOURCE SYSTEM TYPE
+--
+-- Classification of the system that originated an obligation
+-- or workflow event.
+-- ============================================================
+
+data SourceSystemType
+    = CoreBanking
+    | Treasury
+    | CapitalMarkets
+    | TradeFinance
+    | ERP
+    | PaymentSystem
+    | CustodySystem
+    | RiskSystem
+    | ManualOperations
+    | ExternalPartner
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- BUSINESS EVENT SEVERITY
+--
+-- Operational classification only.
+-- ============================================================
+
+data EventSeverity
+    = Informational
+    | Warning
+    | OperationalCritical
+    deriving (Eq, Ord, Show)
+
+
+
+-- ============================================================
+-- FAILURE CLASSIFICATION
+--
+-- Used when an external settlement/netting operation fails.
+-- ============================================================
+
+data FailureCategory
+    = CounterpartyUnavailable
+    | SettlementRailUnavailable
+    | InsufficientFunds
+    | ComplianceHold
+    | ValidationFailure
+    | DuplicateRequest
+    | Timeout
+    | TechnicalFailure
+    | UnknownFailure
+    deriving (Eq, Ord, Show)

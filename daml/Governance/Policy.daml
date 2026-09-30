@@ -1,0 +1,77 @@
+module Governance.Policy where
+
+import Obligation.Types
+import Governance.Participant
+
+-- ============================================================
+-- OBLIGAX
+-- GOVERNANCE POLICY
+--
+-- Authoritative network-level policy definition.
+-- Controls:
+-- * network activation status
+-- * supported settlement currencies
+-- * transaction volume limits (obligation, netting, settlement)
+-- * allowed participant roles
+-- * policy versioning
+-- ============================================================
+
+template ObligaXPolicy
+  with
+    networkOperator : Party
+    policyId : Text
+    policyVersion : Int
+    active : Bool
+    supportedCurrencies : [Currency]
+    maximumObligationAmount : Decimal
+    maximumNettingAmount : Decimal
+    maximumSettlementAmount : Decimal
+    allowedRoles : [ParticipantRole]
+    effectiveDate : Time
+  where
+    signatory networkOperator
+
+    ensure
+      policyId /= ""
+        && policyVersion >= 1
+        && maximumObligationAmount > 0.0
+        && maximumNettingAmount > 0.0
+        && maximumSettlementAmount > 0.0
+        && supportedCurrencies /= []
+        && allowedRoles /= []
+
+    choice UpdatePolicy : ContractId ObligaXPolicy
+      with
+        newMaxObligation : Decimal
+        newMaxNetting : Decimal
+        newMaxSettlement : Decimal
+        newCurrencies : [Currency]
+        newRoles : [ParticipantRole]
+        updatedAt : Time
+      controller networkOperator
+      do
+        assertMsg "POL-001: Maximum obligation must be positive." (newMaxObligation > 0.0)
+        assertMsg "POL-002: Maximum netting must be positive." (newMaxNetting > 0.0)
+        assertMsg "POL-003: Maximum settlement must be positive." (newMaxSettlement > 0.0)
+        assertMsg "POL-004: Supported currencies cannot be empty." (newCurrencies /= [])
+        assertMsg "POL-005: Allowed roles cannot be empty." (newRoles /= [])
+        create this with
+          policyVersion = policyVersion + 1
+          maximumObligationAmount = newMaxObligation
+          maximumNettingAmount = newMaxNetting
+          maximumSettlementAmount = newMaxSettlement
+          supportedCurrencies = newCurrencies
+          allowedRoles = newRoles
+          effectiveDate = updatedAt
+
+    choice DeactivatePolicy : ContractId ObligaXPolicy
+      controller networkOperator
+      do
+        assertMsg "POL-006: Policy is already inactive." active
+        create this with active = False
+
+    choice ActivatePolicy : ContractId ObligaXPolicy
+      controller networkOperator
+      do
+        assertMsg "POL-007: Policy is already active." (not active)
+        create this with active = True

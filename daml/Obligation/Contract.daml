@@ -1,0 +1,519 @@
+module Obligation.Contract where
+
+import Obligation.Types
+import Governance.Policy
+
+-- ============================================================
+-- OBLIGAX
+-- OBLIGATION CONTRACT
+--
+-- Authoritative economic state machine for bilateral financial
+-- obligations in the ObligaX network.
+--
+-- Primary Lifecycle:
+-- Proposed -> Accepted -> Confirmed
+--   -> SettlementPending -> Settled
+--   -> NettingPending -> Netted
+--   -> AmendmentPending -> Confirmed
+--   -> Disputed -> Confirmed
+-- Terminal States: Settled, Netted, Cancelled
+-- ============================================================
+
+template Obligation
+  with
+    creditor : Party
+    debtor : Party
+    obligationId : Text
+    description : Text
+    amount : Decimal
+    currency : Currency
+    status : ObligationStatus
+    createdDate : Date
+    dueDate : Date
+    priority : ObligationPriority
+    version : Int
+    metadata : ObligationMetadata
+  where
+    signatory
+      case status of
+        Proposed -> [metadata.createdBy]
+        Accepted -> [metadata.createdBy, debtor]
+        _        -> [creditor, debtor]
+
+    observer
+      case status of
+        Proposed -> [creditor, debtor]
+        Accepted -> [creditor]
+        _        -> []
+
+    ensure
+      creditor /= debtor
+        && obligationId /= ""
+        && description /= ""
+        && amount > 0.0
+        && dueDate >= createdDate
+        && version >= 1
+        && metadata.version == version
+        && metadata.sourceSystem /= ""
+        && metadata.sourceReference /= ""
+        && metadata.businessUnit /= ""
+
+    -- --------------------------------------------------------
+    -- Proposed -> Accepted
+    -- --------------------------------------------------------
+    choice AcceptObligation : ContractId Obligation
+      controller debtor
+      do
+        assertMsg "OBL-001: Obligation must be in Proposed state." (status == Proposed)
+        create this with
+          status = Accepted
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+    -- --------------------------------------------------------
+    -- Accepted -> Confirmed
+    -- --------------------------------------------------------
+    choice ConfirmObligation : ContractId Obligation
+      controller creditor
+      do
+        assertMsg "OBL-002: Obligation must be in Accepted state." (status == Accepted)
+        create this with
+          status = Confirmed
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+    -- --------------------------------------------------------
+    -- Cancel
+    -- --------------------------------------------------------
+    choice CancelObligation : ContractId Obligation
+      with
+        cancellationReason : Text
+      controller creditor
+      do
+        assertMsg "OBL-003: Cancellation reason is required." (cancellationReason /= "")
+        assertMsg "OBL-004: Obligation is not cancellable in its current state."
+          (status == Proposed || status == Accepted || status == Confirmed || status == AmendmentPending)
+        create this with
+          status = Cancelled
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+    -- --------------------------------------------------------
+    -- Propose Amount Amendment
+    -- --------------------------------------------------------
+    choice ProposeAmountAmendment : (ContractId Obligation, ContractId Amendment)
+      with
+        newAmount : Decimal
+        reason : Text
+      controller creditor
+      do
+        assertMsg "OBL-005: Only Confirmed obligations may be amended." (status == Confirmed)
+        assertMsg "OBL-006: New amount must be greater than zero." (newAmount > 0.0)
+        assertMsg "OBL-007: New amount must differ from current amount." (newAmount /= amount)
+        assertMsg "OBL-008: Amendment reason is required." (reason /= "")
+
+        amendmentCid <- create Amendment with
+          obligationId = obligationId
+          creditor = creditor
+          debtor = debtor
+          field = AmendmentAmount
+          originalAmount = amount
+          proposedAmount = newAmount
+          originalDueDate = dueDate
+          proposedDueDate = dueDate
+          proposedDescription = description
+          proposedBy = creditor
+          reason = reason
+          status = AmendmentProposed
+          version = 1
+
+        pendingCid <- create this with
+          status = AmendmentPending
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+        return (pendingCid, amendmentCid)
+
+    -- --------------------------------------------------------
+    -- Propose Due Date Amendment
+    -- --------------------------------------------------------
+    choice ProposeDueDateAmendment : (ContractId Obligation, ContractId Amendment)
+      with
+        newDueDate : Date
+        reason : Text
+      controller creditor
+      do
+        assertMsg "OBL-009: Only Confirmed obligations may be amended." (status == Confirmed)
+        assertMsg "OBL-010: New due date cannot precede creation date." (newDueDate >= createdDate)
+        assertMsg "OBL-011: New due date must differ from current due date." (newDueDate /= dueDate)
+        assertMsg "OBL-012: Amendment reason is required." (reason /= "")
+
+        amendmentCid <- create Amendment with
+          obligationId = obligationId
+          creditor = creditor
+          debtor = debtor
+          field = AmendmentDueDate
+          originalAmount = amount
+          proposedAmount = amount
+          originalDueDate = dueDate
+          proposedDueDate = newDueDate
+          proposedDescription = description
+          proposedBy = creditor
+          reason = reason
+          status = AmendmentProposed
+          version = 1
+
+        pendingCid <- create this with
+          status = AmendmentPending
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+        return (pendingCid, amendmentCid)
+
+    -- --------------------------------------------------------
+    -- Propose Description Amendment
+    -- --------------------------------------------------------
+    choice ProposeDescriptionAmendment : (ContractId Obligation, ContractId Amendment)
+      with
+        newDescription : Text
+        reason : Text
+      controller creditor
+      do
+        assertMsg "OBL-013: Only Confirmed obligations may be amended." (status == Confirmed)
+        assertMsg "OBL-014: New description is required." (newDescription /= "")
+        assertMsg "OBL-015: New description must differ from current description." (newDescription /= description)
+        assertMsg "OBL-016: Amendment reason is required." (reason /= "")
+
+        amendmentCid <- create Amendment with
+          obligationId = obligationId
+          creditor = creditor
+          debtor = debtor
+          field = AmendmentDescription
+          originalAmount = amount
+          proposedAmount = amount
+          originalDueDate = dueDate
+          proposedDueDate = dueDate
+          proposedDescription = newDescription
+          proposedBy = creditor
+          reason = reason
+          status = AmendmentProposed
+          version = 1
+
+        pendingCid <- create this with
+          status = AmendmentPending
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+        return (pendingCid, amendmentCid)
+
+    -- --------------------------------------------------------
+    -- Apply Accepted Amendment
+    -- --------------------------------------------------------
+    choice ApplyAmendment : ContractId Obligation
+      with
+        amendmentCid : ContractId Amendment
+      controller creditor
+      do
+        assertMsg "OBL-017A: Obligation must be in AmendmentPending state." (status == AmendmentPending)
+        amendment <- fetch amendmentCid
+        assertMsg "OBL-017B: Amendment does not belong to this obligation." (amendment.obligationId == obligationId)
+        assertMsg "OBL-017C: Amendment must be Accepted." (amendment.status == AmendmentAccepted)
+
+        let updatedAmount = if amendment.field == AmendmentAmount then amendment.proposedAmount else amount
+        let updatedDueDate = if amendment.field == AmendmentDueDate then amendment.proposedDueDate else dueDate
+        let updatedDesc = if amendment.field == AmendmentDescription then amendment.proposedDescription else description
+
+        create this with
+          amount = updatedAmount
+          dueDate = updatedDueDate
+          description = updatedDesc
+          status = Confirmed
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+    -- --------------------------------------------------------
+    -- Clear Amendment (if rejected/cancelled)
+    -- --------------------------------------------------------
+    choice ClearAmendment : ContractId Obligation
+      controller creditor
+      do
+        assertMsg "OBL-017: Obligation must be in AmendmentPending state." (status == AmendmentPending)
+        create this with
+          status = Confirmed
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+    -- --------------------------------------------------------
+    -- Raise Dispute
+    -- --------------------------------------------------------
+    choice RaiseDispute : (ContractId Obligation, ContractId Dispute)
+      with
+        reason : DisputeReason
+        details : Text
+      controller debtor
+      do
+        assertMsg "OBL-018: Dispute details are required." (details /= "")
+        assertMsg "OBL-019: Only Confirmed obligations can be disputed." (status == Confirmed)
+
+        disputeCid <- create Dispute with
+          obligationId = obligationId
+          creditor = creditor
+          debtor = debtor
+          raisedBy = debtor
+          reason = reason
+          details = details
+          status = DisputeOpen
+          version = 1
+
+        disputedCid <- create this with
+          status = Disputed
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+        return (disputedCid, disputeCid)
+
+    -- --------------------------------------------------------
+    -- Clear Dispute
+    -- --------------------------------------------------------
+    choice ClearDispute : ContractId Obligation
+      with
+        disputeCid : ContractId Dispute
+      controller creditor
+      do
+        assertMsg "OBL-025: Obligation must be Disputed." (status == Disputed)
+        dispute <- fetch disputeCid
+        assertMsg "OBL-026: Dispute does not belong to this obligation." (dispute.obligationId == obligationId)
+        assertMsg "OBL-027: Dispute is not resolved or rejected."
+          (dispute.status == DisputeResolved || dispute.status == DisputeRejected)
+
+        create this with
+          status = Confirmed
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+    -- --------------------------------------------------------
+    -- Netting: PrepareForNetting (Confirmed -> NettingPending)
+    -- --------------------------------------------------------
+    choice PrepareForNetting : ContractId Obligation
+      controller creditor
+      do
+        assertMsg "OBL-NET-001: Only Confirmed obligations may enter netting." (status == Confirmed)
+        assertMsg "OBL-NET-002: Obligation amount must be positive." (amount > 0.0)
+        create this with
+          status = NettingPending
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+    -- --------------------------------------------------------
+    -- Netting: CompleteNetting (NettingPending -> Netted)
+    -- --------------------------------------------------------
+    choice CompleteNetting : ContractId Obligation
+      controller creditor
+      do
+        assertMsg "OBL-NET-003: Obligation must be NettingPending." (status == NettingPending)
+        create this with
+          status = Netted
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+    -- --------------------------------------------------------
+    -- Netting: ReopenAfterNettingFailure (NettingPending -> Confirmed)
+    -- --------------------------------------------------------
+    choice ReopenAfterNettingFailure : ContractId Obligation
+      controller creditor
+      do
+        assertMsg "OBL-NET-004: Obligation must be NettingPending." (status == NettingPending)
+        create this with
+          status = Confirmed
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+    -- --------------------------------------------------------
+    -- Direct Settlement: EnterSettlementPending (Confirmed -> SettlementPending)
+    -- --------------------------------------------------------
+    choice EnterSettlementPending : ContractId Obligation
+      controller creditor
+      do
+        assertMsg "OBL-028: Only Confirmed obligations can enter settlement." (status == Confirmed)
+        create this with
+          status = SettlementPending
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+    -- --------------------------------------------------------
+    -- Direct Settlement: FinalizeSettlement (SettlementPending -> Settled)
+    -- --------------------------------------------------------
+    choice FinalizeSettlement : ContractId Obligation
+      controller creditor
+      do
+        assertMsg "OBL-032: Obligation must be SettlementPending." (status == SettlementPending)
+        create this with
+          status = Settled
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+    -- --------------------------------------------------------
+    -- Direct Settlement: ReopenAfterSettlementFailure (SettlementPending -> Confirmed)
+    -- --------------------------------------------------------
+    choice ReopenAfterSettlementFailure : ContractId Obligation
+      controller creditor
+      do
+        assertMsg "OBL-033: Obligation must be SettlementPending." (status == SettlementPending)
+        create this with
+          status = Confirmed
+          version = version + 1
+          metadata = metadata with version = version + 1
+
+-- ============================================================
+-- AMENDMENT TEMPLATE
+-- ============================================================
+
+template Amendment
+  with
+    obligationId : Text
+    creditor : Party
+    debtor : Party
+    field : AmendmentField
+    originalAmount : Decimal
+    proposedAmount : Decimal
+    originalDueDate : Date
+    proposedDueDate : Date
+    proposedDescription : Text
+    proposedBy : Party
+    reason : Text
+    status : AmendmentStatus
+    version : Int
+  where
+    signatory proposedBy
+    observer (if proposedBy == creditor then debtor else creditor)
+
+    ensure
+      obligationId /= ""
+        && reason /= ""
+        && version >= 1
+
+    choice AcceptAmendment : ContractId Amendment
+      controller (if proposedBy == creditor then debtor else creditor)
+      do
+        assertMsg "AMD-001: Amendment must be in Proposed state." (status == AmendmentProposed)
+        create this with
+          status = AmendmentAccepted
+          version = version + 1
+
+    choice RejectAmendment : ContractId Amendment
+      with
+        rejectionReason : Text
+      controller (if proposedBy == creditor then debtor else creditor)
+      do
+        assertMsg "AMD-002: Rejection reason required." (rejectionReason /= "")
+        assertMsg "AMD-003: Amendment must be in Proposed state." (status == AmendmentProposed)
+        create this with
+          status = AmendmentRejected
+          version = version + 1
+
+-- ============================================================
+-- DISPUTE TEMPLATE
+-- ============================================================
+
+template Dispute
+  with
+    obligationId : Text
+    creditor : Party
+    debtor : Party
+    raisedBy : Party
+    reason : DisputeReason
+    details : Text
+    status : DisputeStatus
+    version : Int
+  where
+    signatory raisedBy
+    observer (if raisedBy == debtor then creditor else debtor)
+
+    ensure
+      obligationId /= ""
+        && details /= ""
+        && version >= 1
+
+    choice ResolveDispute : ContractId Dispute
+      with
+        resolutionDetails : Text
+      controller creditor
+      do
+        assertMsg "DSP-001: Resolution details required." (resolutionDetails /= "")
+        assertMsg "DSP-002: Dispute must be Open." (status == DisputeOpen || status == DisputeUnderReview)
+        create this with
+          status = DisputeResolved
+          version = version + 1
+
+    choice RejectDispute : ContractId Dispute
+      with
+        rejectionReason : Text
+      controller creditor
+      do
+        assertMsg "DSP-003: Rejection reason required." (rejectionReason /= "")
+        assertMsg "DSP-004: Dispute must be Open." (status == DisputeOpen || status == DisputeUnderReview)
+        create this with
+          status = DisputeRejected
+          version = version + 1
+
+-- ============================================================
+-- OBLIGATION FACTORY
+-- ============================================================
+
+template ObligationFactory
+  with
+    operator : Party
+    policyCid : ContractId ObligaXPolicy
+  where
+    signatory operator
+
+    nonconsuming choice CreateObligation : ContractId Obligation
+      with
+        creditor : Party
+        debtor : Party
+        obligationId : Text
+        description : Text
+        amount : Decimal
+        currency : Currency
+        createdDate : Date
+        dueDate : Date
+        priority : ObligationPriority
+        sourceSystem : Text
+        sourceReference : Text
+        businessUnit : Text
+        createdAt : Time
+      controller operator
+      do
+        policy <- fetch policyCid
+
+        assertMsg "OBL-034: ObligaX policy is inactive." policy.active
+        assertMsg "OBL-035: Creditor and debtor must be different parties." (creditor /= debtor)
+        assertMsg "OBL-036: Obligation ID is required." (obligationId /= "")
+        assertMsg "OBL-037: Description is required." (description /= "")
+        assertMsg "OBL-038: Amount must be greater than zero." (amount > 0.0)
+        assertMsg "OBL-039: Amount exceeds ObligaX policy limit." (amount <= policy.maximumObligationAmount)
+        assertMsg "OBL-040: Currency is not supported by ObligaX policy." (elem currency policy.supportedCurrencies)
+        assertMsg "OBL-041: Due date cannot precede creation date." (dueDate >= createdDate)
+        assertMsg "OBL-042: Source system is required." (sourceSystem /= "")
+        assertMsg "OBL-043: Source reference is required." (sourceReference /= "")
+        assertMsg "OBL-044: Business unit is required." (businessUnit /= "")
+
+        create Obligation with
+          creditor = creditor
+          debtor = debtor
+          obligationId = obligationId
+          description = description
+          amount = amount
+          currency = currency
+          status = Proposed
+          createdDate = createdDate
+          dueDate = dueDate
+          priority = priority
+          version = 1
+          metadata = ObligationMetadata with
+            sourceSystem = sourceSystem
+            sourceReference = sourceReference
+            businessUnit = businessUnit
+            createdBy = operator
+            createdAt = createdAt
+            version = 1

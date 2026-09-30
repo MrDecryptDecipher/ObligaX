@@ -1,0 +1,414 @@
+// ObligaX PostgreSQL Prisma Schema
+// Authoritative for Query Projections, Idempotency, Audit Trails, and Reconciliation
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Currency {
+  USD
+  EUR
+  GBP
+  INR
+  JPY
+  CHF
+  SGD
+  AUD
+  CAD
+}
+
+enum ObligationStatus {
+  Proposed
+  Accepted
+  Confirmed
+  AmendmentPending
+  NettingPending
+  SettlementPending
+  Disputed
+  Settled
+  Netted
+  Cancelled
+}
+
+enum ObligationPriority {
+  Low
+  Normal
+  High
+  Urgent
+}
+
+enum DisputeStatus {
+  DisputeProposed
+  DisputeUnderReview
+  DisputeResolved
+  DisputeRejected
+}
+
+enum DisputeReason {
+  IncorrectAmount
+  IncorrectCurrency
+  IncorrectDueDate
+  DuplicateObligation
+  UnauthorizedObligation
+  IncorrectCounterparty
+  SettlementFailure
+  NettingError
+  ContractualDisagreement
+  OtherReason
+}
+
+enum AmendmentStatus {
+  AmendmentProposed
+  AmendmentAccepted
+  AmendmentRejected
+  AmendmentCancelled
+}
+
+enum AmendmentField {
+  AmendmentAmount
+  AmendmentDueDate
+  AmendmentDescription
+  AmendmentPriority
+}
+
+enum SettlementStatus {
+  SettlementCreated
+  SettlementProcessing
+  SettlementCompleted
+  SettlementFailed
+  SettlementCancelled
+}
+
+enum SettlementRail {
+  BankPaymentRail
+  RTGS
+  InternalLedger
+  TokenizedDeposit
+  Stablecoin
+  SecuritiesSettlement
+  ExternalCustodian
+}
+
+enum SettlementFailureReason {
+  SettlementTimeout
+  SettlementRailUnavailable
+  InsufficientFunds
+  ComplianceHold
+  CounterpartyUnavailable
+  InvalidSettlementReference
+  DuplicateSettlement
+  ExternalRejection
+  TechnicalFailure
+  UnknownSettlementFailure
+}
+
+enum NettingStatus {
+  NettingProposed
+  NettingAccepted
+  NettingRejected
+  NettingCancelled
+  NettingExecuted
+}
+
+enum NettingDirection {
+  InitiatorPays
+  CounterpartyPays
+}
+
+enum NetSettlementStatus {
+  NetSettlementCreated
+  NetSettlementProcessing
+  NetSettlementCompleted
+  NetSettlementFailed
+}
+
+enum ParticipantTier {
+  Tier1
+  Tier2
+  Tier3
+}
+
+enum ParticipantStatus {
+  ParticipantPending
+  ParticipantActive
+  ParticipantSuspended
+  ParticipantRevoked
+}
+
+enum SyncStatus {
+  SYNCED
+  OUT_OF_SYNC
+  PENDING_CONFIRMATION
+}
+
+enum IdempotencyStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum DiscrepancyType {
+  MISSING_ON_LEDGER
+  MISSING_IN_DB
+  STATE_MISMATCH
+  AMOUNT_MISMATCH
+  NONE
+}
+
+enum ReconciliationStatus {
+  OPEN
+  RESOLVED
+  IGNORED
+}
+
+model ObligationProjection {
+  id                  String             @id @default(uuid())
+  contractId          String?            @unique
+  obligationId        String             @unique
+  creditorId          String
+  debtorId            String
+  description         String
+  amount              Decimal            @db.Decimal(28, 10)
+  currency            Currency
+  status              ObligationStatus   @default(Proposed)
+  createdDate         DateTime
+  dueDate             DateTime
+  priority            ObligationPriority @default(Normal)
+  version             Int                @default(1)
+  sourceSystem        String
+  sourceReference     String
+  businessUnit        String
+  syncStatus          SyncStatus         @default(SYNCED)
+  ledgerEffectiveTime DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  amendments          AmendmentProjection[]
+  disputes            DisputeProjection[]
+  settlement          SettlementProjection?
+  nettingLines        NettingLineProjection[]
+
+  @@index([creditorId])
+  @@index([debtorId])
+  @@index([status])
+  @@index([currency])
+  @@index([dueDate])
+}
+
+model AmendmentProjection {
+  id                  String             @id @default(uuid())
+  contractId          String?            @unique
+  obligationId        String
+  obligation          ObligationProjection @relation(fields: [obligationId], references: [obligationId], onDelete: Cascade)
+  creditorId          String
+  debtorId            String
+  field               AmendmentField
+  originalAmount      Decimal            @db.Decimal(28, 10)
+  proposedAmount      Decimal            @db.Decimal(28, 10)
+  originalDueDate     DateTime
+  proposedDueDate     DateTime
+  proposedDescription String
+  proposedBy          String
+  reason              String
+  status              AmendmentStatus    @default(AmendmentProposed)
+  version             Int                @default(1)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@index([obligationId])
+  @@index([status])
+}
+
+model DisputeProjection {
+  id                  String             @id @default(uuid())
+  contractId          String?            @unique
+  obligationId        String
+  obligation          ObligationProjection @relation(fields: [obligationId], references: [obligationId], onDelete: Cascade)
+  initiatorId         String
+  respondentId        String
+  reason              DisputeReason
+  details             String
+  status              DisputeStatus      @default(DisputeProposed)
+  resolutionDetails   String?
+  raisedAt            DateTime           @default(now())
+  resolvedAt          DateTime?
+  updatedAt           DateTime           @updatedAt
+
+  @@index([obligationId])
+  @@index([status])
+}
+
+model SettlementProjection {
+  id                    String                   @id @default(uuid())
+  settlementId          String                   @unique
+  contractId            String?                  @unique
+  obligationId          String                   @unique
+  obligation            ObligationProjection     @relation(fields: [obligationId], references: [obligationId], onDelete: Cascade)
+  creditorId            String
+  debtorId              String
+  amount                Decimal                  @db.Decimal(28, 10)
+  currency              Currency
+  status                SettlementStatus         @default(SettlementCreated)
+  settlementRail        SettlementRail           @default(RTGS)
+  sourceSystem          String
+  sourceReference       String
+  externalTransactionId String?
+  settlementReference   String?
+  failureReason         SettlementFailureReason?
+  failureDetails        String?
+  retryCount            Int                      @default(0)
+  processedAt           DateTime?
+  failedAt              DateTime?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  @@index([status])
+  @@index([settlementRail])
+  @@index([creditorId])
+  @@index([debtorId])
+}
+
+model NettingProjection {
+  id                 String             @id @default(uuid())
+  nettingId          String             @unique
+  contractId         String?            @unique
+  proposalContractId String?            @unique
+  initiatorId        String
+  counterpartyId     String
+  grossReceivable    Decimal            @db.Decimal(28, 10)
+  grossPayable       Decimal            @db.Decimal(28, 10)
+  netAmount          Decimal            @db.Decimal(28, 10)
+  currency           Currency
+  direction          NettingDirection
+  status             NettingStatus      @default(NettingProposed)
+  sourceSystem       String
+  sourceReference    String
+  businessUnit       String
+  executedDate       DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  lines              NettingLineProjection[]
+
+  @@index([status])
+  @@index([initiatorId])
+  @@index([counterpartyId])
+}
+
+model NettingLineProjection {
+  id                   String               @id @default(uuid())
+  nettingId            String
+  netting              NettingProjection    @relation(fields: [nettingId], references: [nettingId], onDelete: Cascade)
+  obligationId         String
+  obligation           ObligationProjection @relation(fields: [obligationId], references: [obligationId], onDelete: Cascade)
+  obligationContractId String
+  creditorId           String
+  debtorId             String
+  amount               Decimal              @db.Decimal(28, 10)
+  currency             Currency
+  createdAt            DateTime             @default(now())
+
+  @@index([nettingId])
+  @@index([obligationId])
+}
+
+model ParticipantProjection {
+  id                    String            @id @default(uuid())
+  participantId         String            @unique
+  partyId               String            @unique
+  participantName       String
+  legalName             String
+  legalEntityIdentifier String
+  jurisdiction          String
+  businessUnit          String
+  tier                  ParticipantTier   @default(Tier2)
+  status                ParticipantStatus @default(ParticipantPending)
+  supportedCurrencies   String[]
+  roles                 String[]
+  maxObligationAmount   Decimal           @db.Decimal(28, 10)
+  maxDailyGrossVolume   Decimal           @db.Decimal(28, 10)
+  maxNettingAmount      Decimal           @db.Decimal(28, 10)
+  registeredAt          DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@index([status])
+  @@index([tier])
+}
+
+model GovernancePolicyProjection {
+  id                      String   @id @default(uuid())
+  contractId              String?  @unique
+  policyId                String   @unique
+  policyVersion           Int      @default(1)
+  active                  Boolean  @default(true)
+  supportedCurrencies     String[]
+  maximumObligationAmount Decimal  @db.Decimal(28, 10)
+  maximumNettingAmount    Decimal  @db.Decimal(28, 10)
+  maximumSettlementAmount Decimal  @db.Decimal(28, 10)
+  allowedRoles            String[]
+  effectiveDate           DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model IdempotencyRecord {
+  id              String            @id @default(uuid())
+  key             String            @unique
+  method          String
+  endpoint        String
+  requestHash     String
+  statusCode      Int?
+  responseHeaders Json?
+  responseBody    Json?
+  status          IdempotencyStatus @default(PENDING)
+  expiresAt       DateTime
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([key])
+  @@index([expiresAt])
+}
+
+model AuditEvent {
+  id            String   @id @default(uuid())
+  eventId       String   @unique @default(uuid())
+  traceId       String
+  actor         String
+  action        String
+  resourceType  String
+  resourceId    String
+  contractId    String?
+  payloadBefore Json?
+  payloadAfter  Json?
+  ipAddress     String?
+  timestamp     DateTime @default(now())
+
+  @@index([resourceId])
+  @@index([resourceType])
+  @@index([traceId])
+  @@index([actor])
+  @@index([timestamp])
+}
+
+model ReconciliationRecord {
+  id                   String               @id @default(uuid())
+  reconciliationId     String
+  recordType           String
+  businessId           String
+  ledgerContractId     String?
+  projectionContractId String?
+  discrepancyType      DiscrepancyType      @default(NONE)
+  details              Json
+  status               ReconciliationStatus @default(OPEN)
+  checkedAt            DateTime             @default(now())
+  resolvedAt           DateTime?
+
+  @@index([reconciliationId])
+  @@index([businessId])
+  @@index([status])
+  @@index([discrepancyType])
+}

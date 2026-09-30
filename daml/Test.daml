@@ -1,0 +1,662 @@
+module Test where
+
+import Daml.Script
+import DA.Date
+import DA.Time
+import Obligation.Types hiding (CounterpartyUnavailable)
+import Obligation.Contract
+import Obligation.Netting
+import Settlement.Settlement
+import Governance.Participant
+import Governance.Policy
+
+-- ============================================================
+-- OBLIGAX
+-- COMPREHENSIVE DAML TEST SUITE
+-- ============================================================
+
+setupTestEnvironment : Script (Party, Party, Party, ContractId ObligaXPolicy, ContractId ObligationFactory, ContractId NettingFactory)
+setupTestEnvironment = do
+  operator <- allocateParty "NetworkOperator"
+  bankA <- allocateParty "BankA"
+  bankB <- allocateParty "BankB"
+
+  let now = time (date 2026 Sep 30) 10 0 0
+
+  -- 1. Create Network Policy
+  policyCid <- submit operator do
+    createCmd ObligaXPolicy with
+      networkOperator = operator
+      policyId = "POL-GLOBAL-001"
+      policyVersion = 1
+      active = True
+      supportedCurrencies = [USD, EUR, GBP]
+      maximumObligationAmount = 10000000.0
+      maximumNettingAmount = 50000000.0
+      maximumSettlementAmount = 50000000.0
+      allowedRoles = [Issuer, ObligationCounterparty, SettlementParticipant, NettingParticipant]
+      effectiveDate = now
+
+  -- 2. Create Factories
+  oblFactoryCid <- submit operator do
+    createCmd ObligationFactory with
+      operator = operator
+      policyCid = policyCid
+
+  netFactoryCid <- submit operator do
+    createCmd NettingFactory with
+      operator = operator
+      policyCid = policyCid
+
+  pure (operator, bankA, bankB, policyCid, oblFactoryCid, netFactoryCid)
+
+-- ------------------------------------------------------------
+-- 1. Obligation Lifecycle: Proposed -> Accepted -> Confirmed -> Settled
+-- ------------------------------------------------------------
+testObligationLifecycle : Script ()
+testObligationLifecycle = script do
+  (operator, bankA, bankB, _, oblFactoryCid, _) <- setupTestEnvironment
+  let today = date 2026 Sep 30
+  let dueDateVal = date 2026 Oct 15
+  let now = time today 10 0 0
+
+  -- Create obligation (Proposed)
+  proposedCid <- submit operator do
+    exerciseCmd oblFactoryCid CreateObligation with
+      creditor = bankB
+      debtor = bankA
+      obligationId = "OBL-001"
+      description = "Invoice 001 - FX hedge settlement"
+      amount = 100000.0
+      currency = USD
+      createdDate = today
+      dueDate = dueDateVal
+      priority = Normal
+      sourceSystem = "TreasuryCore"
+      sourceReference = "TX-998811"
+      businessUnit = "CapitalMarkets"
+      createdAt = now
+
+  -- Verify Proposed state
+  Some proposed <- queryContractId bankA proposedCid
+  assert (proposed.status == Proposed)
+  assert (proposed.amount == 100000.0)
+
+  -- Debtor Accepts
+  acceptedCid <- submit bankA do
+    exerciseCmd proposedCid AcceptObligation
+
+  Some accepted <- queryContractId bankB acceptedCid
+  assert (accepted.status == Accepted)
+
+  -- Creditor Confirms
+  confirmedCid <- submit bankB do
+    exerciseCmd acceptedCid ConfirmObligation
+
+  Some confirmed <- queryContractId bankB confirmedCid
+  assert (confirmed.status == Confirmed)
+  assert (confirmed.version == 3)
+
+  -- Enter Settlement
+  settlementPendingCid <- submit bankB do
+    exerciseCmd confirmedCid EnterSettlementPending
+
+  -- Create Settlement Instruction
+  settlementCid <- submit bankB do
+    createCmd SettlementInstruction with
+      settlementId = "SETTLE-001"
+      obligationId = "OBL-001"
+      obligationCid = settlementPendingCid
+      creditor = bankB
+      debtor = bankA
+      amount = 100000.0
+      currency = USD
+      status = SettlementCreated
+      requestMetadata = SettlementRequestMetadata with
+        sourceSystem = "Fedwire"
+        sourceReference = "FED-REF-1001"
+        settlementRail = RTGS
+        createdAt = now
+        createdBy = bankB
+      executionMetadata = None
+      failureMetadata = None
+
+  -- Start processing
+  processingCid <- submit bankB do
+    exerciseCmd settlementCid StartProcessing
+
+  -- Complete Settlement (Atomic transition: SettlementCompleted & Obligation Settled)
+  completedSettlementCid <- submit bankB do
+    exerciseCmd processingCid CompleteSettlement with
+      externalTransactionId = "EXT-RTGS-9982"
+      settlementReference = "FED-CONF-8812"
+      processedAt = time today 11 0 0
+
+  Some completedInst <- queryContractId bankB completedSettlementCid
+  assert (completedInst.status == SettlementCompleted)
+
+  Some settledObligation <- queryContractId bankB completedInst.obligationCid
+  assert (settledObligation.status == Settled)
+
+-- ------------------------------------------------------------
+-- 2. Settlement Failure & Retry Workflow
+-- ------------------------------------------------------------
+testSettlementFailureAndRetry : Script ()
+testSettlementFailureAndRetry = script do
+  (operator, bankA, bankB, _, oblFactoryCid, _) <- setupTestEnvironment
+  let today = date 2026 Sep 30
+  let dueDateVal = date 2026 Oct 15
+  let now = time today 10 0 0
+
+  -- Create and confirm obligation
+  proposedCid <- submit operator do
+    exerciseCmd oblFactoryCid CreateObligation with
+      creditor = bankB
+      debtor = bankA
+      obligationId = "OBL-FAIL-001"
+      description = "Interbank loan repayment"
+      amount = 50000.0
+      currency = USD
+      createdDate = today
+      dueDate = dueDateVal
+      priority = High
+      sourceSystem = "LoansSystem"
+      sourceReference = "LN-5521"
+      businessUnit = "CorporateBanking"
+      createdAt = now
+
+  acceptedCid <- submit bankA do exerciseCmd proposedCid AcceptObligation
+  confirmedCid <- submit bankB do exerciseCmd acceptedCid ConfirmObligation
+
+  -- Enter Settlement
+  settlementPendingCid <- submit bankB do
+    exerciseCmd confirmedCid EnterSettlementPending
+
+  settlementCid <- submit bankB do
+    createCmd SettlementInstruction with
+      settlementId = "SETTLE-FAIL-001"
+      obligationId = "OBL-FAIL-001"
+      obligationCid = settlementPendingCid
+      creditor = bankB
+      debtor = bankA
+      amount = 50000.0
+      currency = USD
+      status = SettlementCreated
+      requestMetadata = SettlementRequestMetadata with
+        sourceSystem = "Fedwire"
+        sourceReference = "FED-REF-FAIL-1"
+        settlementRail = RTGS
+        createdAt = now
+        createdBy = bankB
+      executionMetadata = None
+      failureMetadata = None
+
+  processingCid <- submit bankB do exerciseCmd settlementCid StartProcessing
+
+  -- External settlement fails (e.g. timeout / counterparty unavailable)
+  failedSettlementCid <- submit bankB do
+    exerciseCmd processingCid FailSettlement with
+      failureReason = CounterpartyUnavailable
+      failureDetails = "Target RTGS participant account temporarily locked."
+      failedAt = time today 11 30 0
+
+  Some failedInst <- queryContractId bankB failedSettlementCid
+  assert (failedInst.status == SettlementFailed)
+
+  -- Obligation is safely reopened to Confirmed state!
+  Some reopenedObligation <- queryContractId bankB failedInst.obligationCid
+  assert (reopenedObligation.status == Confirmed)
+
+  -- Retry Settlement
+  (retriedSettlementCid, newPendingObligationCid) <- submit bankB do
+    exerciseCmd failedSettlementCid RetrySettlement with
+      newSettlementId = "SETTLE-RETRY-002"
+      settlementReference = "FED-REF-RETRY-2"
+      settlementRail = RTGS
+      sourceSystem = "Fedwire"
+      sourceReference = "FED-RETRY-001"
+      createdAt = time today 12 0 0
+
+  Some newPending <- queryContractId bankB newPendingObligationCid
+  assert (newPending.status == SettlementPending)
+
+  processingRetryCid <- submit bankB do exerciseCmd retriedSettlementCid StartProcessing
+  completedRetryCid <- submit bankB do
+    exerciseCmd processingRetryCid CompleteSettlement with
+      externalTransactionId = "EXT-RTGS-SUCCESS-1"
+      settlementReference = "FED-CONF-SUCCESS-1"
+      processedAt = time today 12 15 0
+
+  Some finalSettlement <- queryContractId bankB completedRetryCid
+  assert (finalSettlement.status == SettlementCompleted)
+
+-- ------------------------------------------------------------
+-- 3. Amendment Workflow: Propose -> Accept -> Apply
+-- ------------------------------------------------------------
+testAmendmentWorkflow : Script ()
+testAmendmentWorkflow = script do
+  (operator, bankA, bankB, _, oblFactoryCid, _) <- setupTestEnvironment
+  let today = date 2026 Sep 30
+  let now = time today 10 0 0
+
+  proposedCid <- submit operator do
+    exerciseCmd oblFactoryCid CreateObligation with
+      creditor = bankB
+      debtor = bankA
+      obligationId = "OBL-AMD-001"
+      description = "Trade obligation"
+      amount = 75000.0
+      currency = USD
+      createdDate = today
+      dueDate = date 2026 Oct 10
+      priority = Normal
+      sourceSystem = "Core"
+      sourceReference = "REF-AMD"
+      businessUnit = "Trade"
+      createdAt = now
+
+  acceptedCid <- submit bankA do exerciseCmd proposedCid AcceptObligation
+  confirmedCid <- submit bankB do exerciseCmd acceptedCid ConfirmObligation
+
+  -- Creditor proposes amount amendment from 75,000 to 80,000
+  (amendmentPendingCid, amendmentCid) <- submit bankB do
+    exerciseCmd confirmedCid ProposeAmountAmendment with
+      newAmount = 80000.0
+      reason = "Commercial discount adjustment renegotiated"
+
+  Some pendingObl <- queryContractId bankB amendmentPendingCid
+  assert (pendingObl.status == AmendmentPending)
+
+  -- Debtor accepts the amendment
+  acceptedAmdCid <- submit bankA do
+    exerciseCmd amendmentCid AcceptAmendment
+
+  -- Creditor applies the accepted amendment
+  updatedOblCid <- submit bankB do
+    exerciseCmd amendmentPendingCid ApplyAmendment with
+      amendmentCid = acceptedAmdCid
+
+  Some updatedObl <- queryContractId bankB updatedOblCid
+  assert (updatedObl.status == Confirmed)
+  assert (updatedObl.amount == 80000.0)
+
+-- ------------------------------------------------------------
+-- 4. Dispute Workflow: Raise -> Resolve -> Clear
+-- ------------------------------------------------------------
+testDisputeWorkflow : Script ()
+testDisputeWorkflow = script do
+  (operator, bankA, bankB, _, oblFactoryCid, _) <- setupTestEnvironment
+  let today = date 2026 Sep 30
+  let now = time today 10 0 0
+
+  proposedCid <- submit operator do
+    exerciseCmd oblFactoryCid CreateObligation with
+      creditor = bankB
+      debtor = bankA
+      obligationId = "OBL-DSP-001"
+      description = "Quarterly fee"
+      amount = 25000.0
+      currency = USD
+      createdDate = today
+      dueDate = date 2026 Oct 20
+      priority = Normal
+      sourceSystem = "Core"
+      sourceReference = "REF-DSP"
+      businessUnit = "Ops"
+      createdAt = now
+
+  acceptedCid <- submit bankA do exerciseCmd proposedCid AcceptObligation
+  confirmedCid <- submit bankB do exerciseCmd acceptedCid ConfirmObligation
+
+  -- Debtor raises dispute
+  (disputedOblCid, disputeCid) <- submit bankA do
+    exerciseCmd confirmedCid RaiseDispute with
+      reason = IncorrectAmount
+      details = "Calculated fee exceeds contractual schedule cap."
+
+  Some disputedObl <- queryContractId bankA disputedOblCid
+  assert (disputedObl.status == Disputed)
+
+  -- Creditor resolves dispute
+  resolvedDisputeCid <- submit bankB do
+    exerciseCmd disputeCid ResolveDispute with
+      resolutionDetails = "Agreed to credit adjustment on next billing cycle."
+
+  -- Creditor clears dispute on obligation returning it to Confirmed
+  reconfirmedOblCid <- submit bankB do
+    exerciseCmd disputedOblCid ClearDispute with
+      disputeCid = resolvedDisputeCid
+
+  Some reconfirmedObl <- queryContractId bankB reconfirmedOblCid
+  assert (reconfirmedObl.status == Confirmed)
+
+-- ------------------------------------------------------------
+-- 5. Bilateral Netting: Bank A owes B $100k, Bank B owes A $70k -> Net $30k
+-- ------------------------------------------------------------
+testBilateralNettingSuccess : Script ()
+testBilateralNettingSuccess = script do
+  (operator, bankA, bankB, _, oblFactoryCid, netFactoryCid) <- setupTestEnvironment
+  let today = date 2026 Sep 30
+  let now = time today 10 0 0
+
+  -- Obligation 1: Bank A owes Bank B 100,000 USD
+  p1 <- submit operator do
+    exerciseCmd oblFactoryCid CreateObligation with
+      creditor = bankB
+      debtor = bankA
+      obligationId = "NET-OBL-1"
+      description = "Leg 1: A owes B"
+      amount = 100000.0
+      currency = USD
+      createdDate = today
+      dueDate = date 2026 Oct 30
+      priority = Normal
+      sourceSystem = "Core"
+      sourceReference = "LEG-1"
+      businessUnit = "Treasury"
+      createdAt = now
+  a1 <- submit bankA do exerciseCmd p1 AcceptObligation
+  c1 <- submit bankB do exerciseCmd a1 ConfirmObligation
+
+  -- Obligation 2: Bank B owes Bank A 70,000 USD
+  p2 <- submit operator do
+    exerciseCmd oblFactoryCid CreateObligation with
+      creditor = bankA
+      debtor = bankB
+      obligationId = "NET-OBL-2"
+      description = "Leg 2: B owes A"
+      amount = 70000.0
+      currency = USD
+      createdDate = today
+      dueDate = date 2026 Oct 30
+      priority = Normal
+      sourceSystem = "Core"
+      sourceReference = "LEG-2"
+      businessUnit = "Treasury"
+      createdAt = now
+  a2 <- submit bankB do exerciseCmd p2 AcceptObligation
+  c2 <- submit bankA do exerciseCmd a2 ConfirmObligation
+
+  -- Propose Netting
+  let lines =
+        [ NettingLine with
+            obligationId = "NET-OBL-1"
+            obligationCid = c1
+            creditor = bankB
+            debtor = bankA
+            amount = 100000.0
+            currency = USD
+        , NettingLine with
+            obligationId = "NET-OBL-2"
+            obligationCid = c2
+            creditor = bankA
+            debtor = bankB
+            amount = 70000.0
+            currency = USD
+        ]
+
+  proposalCid <- submit operator do
+    exerciseCmd netFactoryCid CreateProposal with
+      nettingId = "NET-SET-001"
+      initiator = bankA
+      counterparty = bankB
+      lines = lines
+      grossReceivable = 70000.0
+      grossPayable = 100000.0
+      netAmount = 30000.0
+      currency = USD
+      createdDate = today
+      sourceSystem = "NettingEngine"
+      sourceReference = "NET-RUN-881"
+      businessUnit = "SettlementOps"
+      createdAt = now
+
+  -- Counterparty Accepts proposal
+  acceptedProposalCid <- submit bankB do
+    exerciseCmd proposalCid Accept
+
+  -- Initiator Executes atomic netting
+  settlementRecordCid <- submit bankA do
+    exerciseCmd acceptedProposalCid Execute
+
+  -- Check Resulting Netting Settlement
+  Some nettingSettlement <- queryContractId bankA settlementRecordCid
+  assert (nettingSettlement.terms.netAmount == 30000.0)
+  assert (nettingSettlement.terms.direction == InitiatorPays) -- Bank A pays Bank B
+
+  -- Check participating obligations are atomically Netted
+  oblsA <- query @Obligation bankA
+  let [obl1] = [o | (_, o) <- oblsA, o.obligationId == "NET-OBL-1"]
+  assert (obl1.status == Netted)
+
+  let [obl2] = [o | (_, o) <- oblsA, o.obligationId == "NET-OBL-2"]
+  assert (obl2.status == Netted)
+
+-- ------------------------------------------------------------
+-- 6. Netting Atomicity: NO PARTIAL NETTING
+-- If Obligation C is invalid, entire transaction MUST FAIL and rollback!
+-- ------------------------------------------------------------
+testNettingAtomicityNoPartialNetting : Script ()
+testNettingAtomicityNoPartialNetting = script do
+  (operator, bankA, bankB, _, oblFactoryCid, netFactoryCid) <- setupTestEnvironment
+  let today = date 2026 Sep 30
+  let now = time today 10 0 0
+
+  -- Obligation 1: Valid Confirmed
+  p1 <- submit operator do
+    exerciseCmd oblFactoryCid CreateObligation with
+      creditor = bankB
+      debtor = bankA
+      obligationId = "VALID-OBL-1"
+      description = "Valid 1"
+      amount = 50000.0
+      currency = USD
+      createdDate = today
+      dueDate = date 2026 Oct 30
+      priority = Normal
+      sourceSystem = "Core"
+      sourceReference = "REF-V1"
+      businessUnit = "Treasury"
+      createdAt = now
+  a1 <- submit bankA do exerciseCmd p1 AcceptObligation
+  c1 <- submit bankB do exerciseCmd a1 ConfirmObligation
+
+  -- Obligation 2: Valid Confirmed
+  p2 <- submit operator do
+    exerciseCmd oblFactoryCid CreateObligation with
+      creditor = bankA
+      debtor = bankB
+      obligationId = "VALID-OBL-2"
+      description = "Valid 2"
+      amount = 20000.0
+      currency = USD
+      createdDate = today
+      dueDate = date 2026 Oct 30
+      priority = Normal
+      sourceSystem = "Core"
+      sourceReference = "REF-V2"
+      businessUnit = "Treasury"
+      createdAt = now
+  a2 <- submit bankB do exerciseCmd p2 AcceptObligation
+  c2 <- submit bankA do exerciseCmd a2 ConfirmObligation
+
+  -- Obligation 3: INVALID because it is still in Proposed state (not Confirmed!)
+  invalidProposedCid <- submit operator do
+    exerciseCmd oblFactoryCid CreateObligation with
+      creditor = bankB
+      debtor = bankA
+      obligationId = "INVALID-OBL-3"
+      description = "Unaccepted Obligation"
+      amount = 10000.0
+      currency = USD
+      createdDate = today
+      dueDate = date 2026 Oct 30
+      priority = Normal
+      sourceSystem = "Core"
+      sourceReference = "REF-INV"
+      businessUnit = "Treasury"
+      createdAt = now
+
+  let mixedLines =
+        [ NettingLine with
+            obligationId = "VALID-OBL-1"
+            obligationCid = c1
+            creditor = bankB
+            debtor = bankA
+            amount = 50000.0
+            currency = USD
+        , NettingLine with
+            obligationId = "VALID-OBL-2"
+            obligationCid = c2
+            creditor = bankA
+            debtor = bankB
+            amount = 20000.0
+            currency = USD
+        , NettingLine with
+            obligationId = "INVALID-OBL-3"
+            obligationCid = invalidProposedCid -- STILL PROPOSED!
+            creditor = bankB
+            debtor = bankA
+            amount = 10000.0
+            currency = USD
+        ]
+
+  proposalCid <- submit operator do
+    exerciseCmd netFactoryCid CreateProposal with
+      nettingId = "NET-ATOMIC-FAIL"
+      initiator = bankA
+      counterparty = bankB
+      lines = mixedLines
+      grossReceivable = 20000.0
+      grossPayable = 60000.0
+      netAmount = 40000.0
+      currency = USD
+      createdDate = today
+      sourceSystem = "NettingEngine"
+      sourceReference = "NET-RUN-ERR"
+      businessUnit = "SettlementOps"
+      createdAt = now
+
+  acceptedProposalCid <- submit bankB do
+    exerciseCmd proposalCid Accept
+
+  -- ATTEMPT TO EXECUTE MUST FAIL!
+  submitMustFail bankA do
+    exerciseCmd acceptedProposalCid Execute
+
+  -- PROVE NO PARTIAL NETTING OCCURRED:
+  -- Obligation 1 MUST STILL BE Confirmed (NOT Netted!)
+  Some obl1StillConfirmed <- queryContractId bankA c1
+  assert (obl1StillConfirmed.status == Confirmed)
+
+  -- Obligation 2 MUST STILL BE Confirmed (NOT Netted!)
+  Some obl2StillConfirmed <- queryContractId bankB c2
+  assert (obl2StillConfirmed.status == Confirmed)
+
+  -- Obligation 3 MUST STILL BE Proposed (NOT Netted!)
+  Some obl3StillProposed <- queryContractId bankA invalidProposedCid
+  assert (obl3StillProposed.status == Proposed)
+
+-- ------------------------------------------------------------
+-- 7. Participant Governance & Policy Controls
+-- ------------------------------------------------------------
+testGovernanceAndPolicy : Script ()
+testGovernanceAndPolicy = script do
+  (operator, bankA, _, policyCid, oblFactoryCid, _) <- setupTestEnvironment
+  let today = date 2026 Sep 30
+  let now = time today 10 0 0
+
+  -- 1. Exceed policy limit -> must fail
+  submitMustFail operator do
+    exerciseCmd oblFactoryCid CreateObligation with
+      creditor = bankA
+      debtor = operator
+      obligationId = "EXCEED-LIMIT"
+      description = "Too large"
+      amount = 999999999.0 -- Policy limit is 10,000,000
+      currency = USD
+      createdDate = today
+      dueDate = date 2026 Oct 30
+      priority = Normal
+      sourceSystem = "Core"
+      sourceReference = "REF"
+      businessUnit = "Ops"
+      createdAt = now
+
+  -- 2. Unsupported currency -> must fail
+  submitMustFail operator do
+    exerciseCmd oblFactoryCid CreateObligation with
+      creditor = bankA
+      debtor = operator
+      obligationId = "BAD-CURR"
+      description = "JPY not in policy"
+      amount = 1000.0
+      currency = JPY -- Policy only supports USD, EUR, GBP
+      createdDate = today
+      dueDate = date 2026 Oct 30
+      priority = Normal
+      sourceSystem = "Core"
+      sourceReference = "REF"
+      businessUnit = "Ops"
+      createdAt = now
+
+  -- 3. Participant Registration & Suspension
+  regFactoryCid <- submit operator do
+    createCmd ParticipantGovernanceFactory with networkOperator = operator
+
+  registryCid <- submit operator do
+    exerciseCmd regFactoryCid CreateRegistry with
+      registryId = "REG-001"
+      networkName = "ObligaX Mainnet"
+      governanceVersion = 1
+
+  regCid <- submit operator do
+    exerciseCmd registryCid RegisterParticipant with
+      participant = bankA
+      participantId = "PART-BANK-A"
+      participantName = "Global Bank A"
+      tier = Tier1
+      roles = [Issuer, ObligationCounterparty, SettlementParticipant, NettingParticipant]
+      supportedCurrencies = [USD, EUR]
+      limits = ParticipantLimits with
+        maximumObligationAmount = 5000000.0
+        maximumDailyGrossVolume = 50000000.0
+        maximumNettingAmount = 25000000.0
+      capabilities = ParticipantCapabilities with
+        canCreateObligations = True
+        canAcceptObligations = True
+        canConfirmObligations = True
+        canInitiateNetting = True
+        canParticipateInNetting = True
+        canInitiateSettlement = True
+        canProcessSettlement = False
+        canResolveDisputes = True
+        canProposeAmendments = True
+      legalName = "Global Bank A PLC"
+      legalEntityIdentifier = "5493006MHB84DD0ZWV18"
+      jurisdiction = "GB"
+      businessUnit = "InstitutionalBanking"
+      sourceSystem = "KYC-Platform"
+      registeredAt = now
+
+  -- Participant activates
+  activeRegCid <- submit bankA do
+    exerciseCmd regCid ActivateParticipant
+
+  Some activeReg <- queryContractId bankA activeRegCid
+  assert (activeReg.status == ParticipantActive)
+
+  -- Operator suspends participant
+  suspendedRegCid <- submit operator do
+    exerciseCmd activeRegCid SuspendParticipant with
+      reason = "Periodic AML review pending"
+
+  Some suspendedReg <- queryContractId bankA suspendedRegCid
+  assert (suspendedReg.status == ParticipantSuspended)
+
+  -- Operator reactivates participant
+  reactivatedRegCid <- submit operator do
+    exerciseCmd suspendedRegCid ReactivateParticipant
+
+  Some reactivatedReg <- queryContractId bankA reactivatedRegCid
+  assert (reactivatedReg.status == ParticipantActive)
