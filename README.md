@@ -106,9 +106,14 @@ stateDiagram-v2
 - Mismatched payloads using the same idempotency key are rejected.
 
 ### 4.4. Tamper-Evident Chained Audit Logging
-- Every state transition produces a cryptographically hashed audit entry:
-  $$\text{Hash}_n = \text{SHA-256}(\text{Hash}_{n-1} + \text{Timestamp} + \text{EventType} + \text{Actor} + \text{Payload})$$
-- Provides mathematical non-repudiation for regulatory audits and compliance verification.
+
+Every state transition produces a cryptographically hashed audit entry:
+
+$$
+\text{Hash}_n = \text{SHA-256}(\text{Hash}_{n-1} + \text{Timestamp} + \text{EventType} + \text{Actor} + \text{Payload})
+$$
+
+Provides mathematical non-repudiation for regulatory audits and compliance verification.
 
 ### 4.5. Settlement Reconciliation & Drift Detection
 - Compares active Canton ledger contracts against PostgreSQL read projections and external rail settlement logs.
