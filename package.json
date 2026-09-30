@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
-    "@prisma/client": "^5.22.0",
+    "@prisma/client": "^7.10.0",
     "cors": "^2.8.5",
     "decimal.js": "^10.4.3",
     "dotenv": "^16.4.5",
