@@ -1,3 +1,4 @@
+import path from 'path';
 import express, { Express, Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -52,9 +53,19 @@ export const createApp = (deps: AppDependencies): Express => {
   // Mount API v1 router
   app.use('/api/v1', createApiRouter(deps.controllers));
 
-  // Catch-all 404 handler
+  // Serve static institutional console frontend
+  const frontendPath = path.resolve(__dirname, '../../frontend');
+  app.use(express.static(frontendPath));
+
+  // Catch-all 404 handler for API routes or unhandled paths
   app.use((req: Request, res: Response, next: NextFunction) => {
-    next(new NotFoundError('Endpoint', req.originalUrl));
+    if (req.path.startsWith('/api')) {
+      return next(new NotFoundError('Endpoint', req.originalUrl));
+    }
+    // Fallback to index.html for SPA-style routing if applicable
+    res.sendFile(path.join(frontendPath, 'index.html'), err => {
+      if (err) next(new NotFoundError('Page', req.originalUrl));
+    });
   });
 
   // Global structured error handling

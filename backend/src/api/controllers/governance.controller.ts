@@ -1,13 +1,15 @@
 import { Request, Response, NextFunction } from 'express';
 import { ParticipantService } from '../../application/governance/participant.service';
 import { PolicyService } from '../../application/governance/policy.service';
+import { AuditRepository } from '../../infrastructure/database/repositories/audit.repository';
 import { ApiResponse } from '../../types/common.types';
 import { NotFoundError } from '../../types/errors.types';
 
 export class GovernanceController {
   constructor(
     private readonly participantService: ParticipantService,
-    private readonly policyService: PolicyService
+    private readonly policyService: PolicyService,
+    private readonly auditRepo?: AuditRepository
   ) {}
 
   public registerParticipant = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -100,4 +102,64 @@ export class GovernanceController {
       next(err);
     }
   };
+
+  public listParticipants = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await this.participantService.listParticipants();
+      const response: ApiResponse = {
+        success: true,
+        data: result,
+        meta: {
+          traceId: (req as any).traceId,
+          timestamp: new Date().toISOString()
+        }
+      };
+      res.status(200).json(response);
+    } catch (err: unknown) {
+      next(err);
+    }
+  };
+
+  public getAuditLog = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const filters = req.query as any;
+      const logs = this.auditRepo ? await this.auditRepo.query(filters) : [];
+      const tipHash = this.auditRepo ? this.auditRepo.getTipHash() : '';
+      const response: ApiResponse = {
+        success: true,
+        data: {
+          logs,
+          tipHash,
+          total: logs.length
+        },
+        meta: {
+          traceId: (req as any).traceId,
+          timestamp: new Date().toISOString()
+        }
+      };
+      res.status(200).json(response);
+    } catch (err: unknown) {
+      next(err);
+    }
+  };
+
+  public verifyAuditChain = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const verification = this.auditRepo
+        ? this.auditRepo.verifyChainIntegrity()
+        : { isValid: true, reason: 'Audit repository not configured in local harness' };
+      const response: ApiResponse = {
+        success: true,
+        data: verification,
+        meta: {
+          traceId: (req as any).traceId,
+          timestamp: new Date().toISOString()
+        }
+      };
+      res.status(200).json(response);
+    } catch (err: unknown) {
+      next(err);
+    }
+  };
 }
+

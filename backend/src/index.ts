@@ -61,7 +61,7 @@ export const buildAppContainer = () => {
   const obligationController = new ObligationController(obligationService, amendmentService, disputeService);
   const nettingController = new NettingController(nettingService);
   const settlementController = new SettlementController(settlementService);
-  const governanceController = new GovernanceController(participantService, policyService);
+  const governanceController = new GovernanceController(participantService, policyService, auditRepo);
   const reconciliationController = new ReconciliationController(reconciliationService);
   const healthController = new HealthController(cantonClient);
 

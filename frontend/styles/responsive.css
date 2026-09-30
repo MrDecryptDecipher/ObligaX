@@ -1,0 +1,127 @@
+/**
+ * ObligaX Responsive Design Stylesheet
+ * Tablet (<= 1024px) & Mobile (<= 768px)
+ */
+
+/* =========================================================================
+   TABLET ADAPTATIONS (<= 1024px)
+   ========================================================================= */
+@media (max-width: 1024px) {
+  :root {
+    --sidebar-width: 200px;
+    --drawer-width: 460px;
+  }
+
+  .overview-panels-row {
+    grid-template-columns: 1fr;
+  }
+
+  .netting-workbench-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .table-viewport {
+    max-height: calc(100vh - 320px);
+  }
+
+  .view-content {
+    padding: var(--space-lg);
+  }
+}
+
+/* =========================================================================
+   MOBILE ADAPTATIONS (<= 768px)
+   ========================================================================= */
+@media (max-width: 768px) {
+  :root {
+    --header-height: 48px;
+    --drawer-width: 100vw;
+  }
+
+  .brand-subtext {
+    display: none;
+  }
+
+  .cmd-trigger-btn {
+    padding: 4px 6px;
+  }
+
+  .cmd-kbd {
+    display: none;
+  }
+
+  .participant-context-label {
+    display: none;
+  }
+
+  .app-body {
+    flex-direction: column;
+  }
+
+  .app-sidebar {
+    width: 100%;
+    min-width: 100%;
+    height: auto;
+    max-height: 200px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-default);
+    display: none; /* Can be toggled on mobile */
+  }
+
+  .app-sidebar.mobile-open {
+    display: flex;
+    position: fixed;
+    top: var(--header-height);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 500;
+    max-height: none;
+  }
+
+  .view-header {
+    padding: var(--space-md);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-sm);
+  }
+
+  .view-header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .view-content {
+    padding: var(--space-md);
+    gap: var(--space-md);
+  }
+
+  .exposure-kpi-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .grid-toolbar-top {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .grid-search-box {
+    max-width: 100%;
+  }
+
+  .modal-dialog {
+    width: 95vw;
+    margin: 10px;
+  }
+
+  .detail-drawer {
+    width: 100vw;
+  }
+
+  .toast-container {
+    left: var(--space-sm);
+    right: var(--space-sm);
+    bottom: var(--space-sm);
+    max-width: none;
+  }
+}

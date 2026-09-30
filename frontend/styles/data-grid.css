@@ -1,0 +1,340 @@
+/**
+ * ObligaX High-Density Financial Data Grid Styles
+ */
+.grid-container {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+/* =========================================================================
+   GRID TOOLBAR & FILTER BAR
+   ========================================================================= */
+.grid-toolbar {
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--border-default);
+  background-color: var(--surface-primary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.grid-toolbar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+}
+
+.grid-search-box {
+  position: relative;
+  min-width: 240px;
+  max-width: 340px;
+  flex: 1;
+}
+
+.grid-search-icon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.grid-search-input {
+  width: 100%;
+  background-color: var(--surface-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 5px 10px 5px 28px;
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.grid-search-input:focus {
+  border-color: var(--border-focus);
+  background-color: var(--surface-tertiary);
+}
+
+.grid-controls-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* Saved Views Quick Filter Pills */
+.saved-views-tabs {
+  display: flex;
+  gap: 2px;
+  background-color: var(--surface-secondary);
+  padding: 2px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  overflow-x: auto;
+}
+
+.saved-view-tab {
+  padding: 3px 9px;
+  font-size: var(--font-size-2xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+
+.saved-view-tab:hover {
+  color: var(--text-primary);
+}
+
+.saved-view-tab.active {
+  background-color: var(--surface-elevated);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Active Filter Chips Bar */
+.filter-chips-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background-color: var(--surface-secondary);
+  border: 1px solid var(--border-default);
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  font-size: var(--font-size-2xs);
+  color: var(--text-secondary);
+}
+
+.filter-chip strong {
+  color: var(--text-primary);
+}
+
+.filter-chip-remove {
+  cursor: pointer;
+  color: var(--text-tertiary);
+  padding: 0 1px;
+}
+
+.filter-chip-remove:hover {
+  color: var(--state-danger);
+}
+
+.clear-filters-btn {
+  font-size: var(--font-size-2xs);
+  color: var(--accent-primary);
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.clear-filters-btn:hover {
+  text-decoration: underline;
+}
+
+/* Contextual Selection Action Bar */
+.grid-selection-bar {
+  padding: var(--space-xs) var(--space-md);
+  background-color: rgba(37, 99, 235, 0.12);
+  border-bottom: 1px solid rgba(37, 99, 235, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+}
+
+/* =========================================================================
+   TABLE VIEWPORT
+   ========================================================================= */
+.table-viewport {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: calc(100vh - 270px);
+  position: relative;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--font-size-xs);
+  text-align: left;
+}
+
+/* Table Header */
+.data-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background-color: var(--surface-secondary);
+}
+
+.data-table th {
+  padding: 8px 12px;
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border-default);
+  border-right: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  user-select: none;
+  background-color: var(--surface-secondary);
+}
+
+.data-table th:last-child {
+  border-right: none;
+}
+
+.data-table th.sortable {
+  cursor: pointer;
+}
+
+.data-table th.sortable:hover {
+  background-color: var(--surface-tertiary);
+  color: var(--text-primary);
+}
+
+.th-content {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sort-icon {
+  width: 12px;
+  height: 12px;
+  color: var(--text-tertiary);
+}
+
+.sort-icon.active {
+  color: var(--accent-primary);
+}
+
+/* Table Body Rows */
+.data-table tbody tr {
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.data-table tbody tr:hover {
+  background-color: var(--surface-hover);
+}
+
+.data-table tbody tr.selected {
+  background-color: var(--surface-selected);
+}
+
+.data-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid rgba(255, 255, 255, 0.02);
+  white-space: nowrap;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.data-table td:last-child {
+  border-right: none;
+}
+
+/* Density Modes */
+.grid-container.density-compact .data-table td {
+  padding: 4px 10px;
+  font-size: var(--font-size-2xs);
+}
+
+.grid-container.density-compact .data-table th {
+  padding: 5px 10px;
+  font-size: 10px;
+}
+
+.grid-container.density-comfortable .data-table td {
+  padding: 10px 14px;
+  font-size: var(--font-size-xs);
+}
+
+.grid-container.density-comfortable .data-table th {
+  padding: 10px 14px;
+}
+
+/* Key Column Typography */
+.col-id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: #fff;
+}
+
+.col-amount {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.col-actions {
+  text-align: right;
+}
+
+/* =========================================================================
+   PAGINATION FOOTER
+   ========================================================================= */
+.grid-footer {
+  padding: var(--space-xs) var(--space-md);
+  border-top: 1px solid var(--border-default);
+  background-color: var(--surface-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.page-info {
+  font-size: var(--font-size-2xs);
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+
+.page-size-selector {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-2xs);
+}
+
+.page-size-selector select {
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+  font-size: var(--font-size-2xs);
+}

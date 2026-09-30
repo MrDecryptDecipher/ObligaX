@@ -7,12 +7,16 @@ import { CreatePolicySchema } from '../../schemas/governance.schema';
 export const createGovernanceRouter = (controller: GovernanceController): Router => {
   const router = Router();
 
+  router.get('/participants', controller.listParticipants);
   router.post('/participants', validateBody(RegisterParticipantSchema), controller.registerParticipant);
   router.get('/participants/:id', controller.getParticipant);
   router.post('/participants/:id/activate', controller.activateParticipant);
 
   router.post('/policy', validateBody(CreatePolicySchema), controller.setPolicy);
   router.get('/policy', controller.getPolicy);
+
+  router.get('/audit', controller.getAuditLog);
+  router.get('/audit/verify', controller.verifyAuditChain);
 
   return router;
 };

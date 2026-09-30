@@ -6,6 +6,7 @@ import { InitiateSettlementSchema, RetrySettlementSchema } from '../../schemas/s
 export const createSettlementRouter = (controller: SettlementController): Router => {
   const router = Router();
 
+  router.get('/', controller.query);
   router.post('/', validateBody(InitiateSettlementSchema), controller.initiate);
   router.get('/:id', controller.getById);
   router.post('/:id/process', controller.process);

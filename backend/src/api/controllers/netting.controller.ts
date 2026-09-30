@@ -116,4 +116,22 @@ export class NettingController {
       next(err);
     }
   };
+
+  public queryProposals = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await this.nettingService.queryProposals(req.query, (req as any).context);
+      const response: ApiResponse = {
+        success: true,
+        data: result,
+        meta: {
+          traceId: (req as any).traceId,
+          timestamp: new Date().toISOString()
+        }
+      };
+      res.status(200).json(response);
+    } catch (err: unknown) {
+      next(err);
+    }
+  };
 }
+

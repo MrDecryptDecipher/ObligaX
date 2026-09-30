@@ -131,4 +131,90 @@ export class ParticipantService {
   public async getParticipant(participantId: string): Promise<ParticipantRegistrationEntity | null> {
     return this.participants.get(participantId) || null;
   }
+
+  public async listParticipants(): Promise<ParticipantRegistrationEntity[]> {
+    if (this.participants.size === 0) {
+      const defaultParticipants: Array<{
+        id: string;
+        name: string;
+        party: string;
+        lei: string;
+        tier: 'Tier1' | 'Tier2';
+        roles: string[];
+      }> = [
+        {
+          id: 'NetworkOperator',
+          name: 'ObligaX Clearinghouse & Network Operator',
+          party: 'NetworkOperator::1220d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890a1b2c3',
+          lei: '549300OBLIGAXOPERATOR01',
+          tier: 'Tier1',
+          roles: ['NetworkOperator', 'ComplianceOperator', 'SettlementOperator']
+        },
+        {
+          id: 'BankA',
+          name: 'Bank A (Global Custody & Investment Banking)',
+          party: 'BankA::1220a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890',
+          lei: '549300BANKAGLOBALCUST01',
+          tier: 'Tier1',
+          roles: ['ObligationCounterparty', 'NettingParticipant', 'SettlementParticipant']
+        },
+        {
+          id: 'BankB',
+          name: 'Bank B (Institutional Markets & Treasury)',
+          party: 'BankB::1220b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890a1',
+          lei: '549300BANKBINSTMARKET02',
+          tier: 'Tier1',
+          roles: ['ObligationCounterparty', 'NettingParticipant', 'SettlementParticipant']
+        },
+        {
+          id: 'BankC',
+          name: 'Bank C (Securities Clearing & Liquidity)',
+          party: 'BankC::1220c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890a1b2',
+          lei: '549300BANKCSECURITIES03',
+          tier: 'Tier2',
+          roles: ['ObligationCounterparty', 'NettingParticipant', 'SettlementParticipant']
+        }
+      ];
+
+      for (const p of defaultParticipants) {
+        this.participants.set(p.id, {
+          contractId: `cid-part-${p.id.toLowerCase()}`,
+          participantId: p.id,
+          party: p.party,
+          participantName: p.name,
+          tier: p.tier,
+          roles: p.roles as any,
+          status: 'ParticipantActive',
+          supportedCurrencies: ['USD', 'EUR', 'GBP', 'CHF'],
+          limits: {
+            maximumObligationAmount: SafeDecimal.from('100000000'),
+            maximumDailyGrossVolume: SafeDecimal.from('1000000000'),
+            maximumNettingAmount: SafeDecimal.from('500000000')
+          },
+          capabilities: {
+            canCreateObligations: true,
+            canAcceptObligations: true,
+            canConfirmObligations: true,
+            canInitiateNetting: true,
+            canParticipateInNetting: true,
+            canInitiateSettlement: true,
+            canProcessSettlement: p.id === 'NetworkOperator',
+            canResolveDisputes: true,
+            canProposeAmendments: true
+          },
+          metadata: {
+            legalName: p.name,
+            legalEntityIdentifier: p.lei,
+            jurisdiction: 'US/NY',
+            businessUnit: 'ClearingOps',
+            sourceSystem: 'ObligaX-Core',
+            registeredAt: new Date(),
+            registeredBy: 'NetworkOperator'
+          }
+        });
+      }
+    }
+    return Array.from(this.participants.values());
+  }
 }
+

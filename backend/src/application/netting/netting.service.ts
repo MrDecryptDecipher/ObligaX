@@ -301,4 +301,9 @@ export class NettingService {
     }
     return settlement;
   }
+
+  public async queryProposals(filters: Record<string, unknown>, context: RequestContext): Promise<NettingProposalEntity[]> {
+    return this.nettingRepo.queryProposals(filters as any);
+  }
 }
+

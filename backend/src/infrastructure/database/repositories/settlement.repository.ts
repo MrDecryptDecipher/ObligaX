@@ -30,4 +30,17 @@ export class SettlementRepository {
       this.settlements.set(settlementId, existing);
     }
   }
+
+  public async query(filters?: {
+    status?: SettlementStatus;
+    rail?: string;
+    obligationId?: string;
+  }): Promise<SettlementEntity[]> {
+    let items = Array.from(this.settlements.values());
+    if (filters?.status) items = items.filter(s => s.status === filters.status);
+    if (filters?.obligationId) items = items.filter(s => s.obligationId === filters.obligationId);
+    if (filters?.rail) items = items.filter(s => s.requestMetadata?.settlementRail === (filters.rail as any));
+    return items;
+  }
 }
+

@@ -36,4 +36,22 @@ export class NettingRepository {
   public async findSettlementById(nettingId: string): Promise<NettingSettlementEntity | null> {
     return this.settlements.get(nettingId) || null;
   }
+
+
+  public async queryProposals(filters?: {
+    initiator?: string;
+    counterparty?: string;
+    status?: NettingStatus;
+  }): Promise<NettingProposalEntity[]> {
+    let items = Array.from(this.proposals.values());
+    if (filters?.initiator) items = items.filter(p => p.initiator === filters.initiator);
+    if (filters?.counterparty) items = items.filter(p => p.counterparty === filters.counterparty);
+    if (filters?.status) items = items.filter(p => p.status === filters.status);
+    return items;
+  }
+
+  public async findAllSettlements(): Promise<NettingSettlementEntity[]> {
+    return Array.from(this.settlements.values());
+  }
 }
+

@@ -312,6 +312,13 @@ export class SettlementService {
     return settlement;
   }
 
+  public async querySettlements(
+    filters: Record<string, unknown>,
+    context: RequestContext
+  ): Promise<SettlementEntity[]> {
+    return this.settlementRepo.query(filters as any);
+  }
+
   public async handleExternalCallback(
     payload: {
       settlementId: string;
