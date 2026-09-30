@@ -4,7 +4,7 @@
 # ==========================================
 
 # Stage 1: Build & Compile TypeScript
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /build
 
@@ -20,7 +20,7 @@ RUN npm run build
 RUN npm prune --production
 
 # Stage 2: Distroless/Hardened Runtime
-FROM node:20-alpine AS runner
+FROM node:26-alpine AS runner
 
 LABEL org.opencontainers.image.title="ObligaX Institutional API" \
       org.opencontainers.image.description="Enterprise Bilateral Obligation, Netting, and Canton Settlement API" \

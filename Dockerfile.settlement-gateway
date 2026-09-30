@@ -3,7 +3,7 @@
 # Multi-stage, non-root (UID 10003)
 # ==========================================
 
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /build
 
@@ -17,7 +17,7 @@ COPY backend ./backend/
 RUN npm run build
 RUN npm prune --production
 
-FROM node:20-alpine AS runner
+FROM node:26-alpine AS runner
 
 LABEL org.opencontainers.image.title="ObligaX Settlement Gateway" \
       org.opencontainers.image.description="External Banking Rails & RTGS Simulator Gateway" \
