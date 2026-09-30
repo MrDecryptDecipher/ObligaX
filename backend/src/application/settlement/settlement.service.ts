@@ -311,4 +311,126 @@ export class SettlementService {
     }
     return settlement;
   }
+
+  public async handleExternalCallback(
+    payload: {
+      settlementId: string;
+      externalTransactionId: string;
+      amount: string;
+      currency: string;
+      payer: string;
+      payee: string;
+      reference: string;
+      status: 'COMPLETED' | 'FAILED';
+      failureReason?: string;
+      failureDetails?: string;
+    },
+    context: RequestContext
+  ): Promise<SettlementEntity> {
+    const settlement = await this.settlementRepo.findBySettlementId(payload.settlementId);
+    if (!settlement) {
+      throw new NotFoundError('SettlementInstruction', payload.settlementId);
+    }
+
+    const obligation = await this.obligationRepo.findByObligationId(settlement.obligationId);
+    if (!obligation) {
+      throw new NotFoundError('Obligation', settlement.obligationId);
+    }
+
+    // Strict validation against recorded settlement parameters
+    if (settlement.creditor !== payload.payee || settlement.debtor !== payload.payer) {
+      throw new Error('ERR_CALLBACK_MISMATCH: Counterparties in callback do not match settlement record.');
+    }
+
+    if (payload.status === 'COMPLETED') {
+      const commandId = `OBLIGAX/SETTLEMENT_COMPLETE/${payload.settlementId}/ATTEMPT-01`;
+
+      if (settlement.contractId) {
+        await this.cantonClient.submit({
+          commandId,
+          actAs: [context.partyId || 'NetworkOperator'],
+          commands: [
+            CantonCommands.completeSettlement(
+              settlement.contractId,
+              payload.externalTransactionId,
+              payload.reference,
+              new Date().toISOString()
+            ),
+            CantonCommands.finalizeSettlement(obligation.contractId!)
+          ]
+        });
+      }
+
+      settlement.status = 'SettlementCompleted';
+      settlement.executionMetadata = {
+        externalTransactionId: payload.externalTransactionId,
+        settlementReference: payload.reference,
+        processedAt: new Date(),
+        processedBy: 'ExternalSettlementRail'
+      };
+      await this.settlementRepo.save(settlement);
+
+      obligation.status = 'Settled';
+      obligation.version += 1;
+      await this.obligationRepo.save(obligation);
+
+      await this.auditRepo.record({
+        traceId: context.traceId,
+        actor: context.actor,
+        action: 'SETTLEMENT_COMPLETED_ASYNC',
+        resourceType: 'SettlementInstruction',
+        resourceId: payload.settlementId,
+        contractId: settlement.contractId,
+        payloadAfter: settlement,
+        ipAddress: context.ipAddress
+      });
+
+      await EventPublisher.publishEvent('SETTLEMENT_COMPLETED', payload.settlementId, settlement, context.traceId);
+      return settlement;
+    } else {
+      if (settlement.contractId) {
+        await this.cantonClient.submit({
+          commandId: `OBLIGAX/SETTLEMENT_FAIL/${payload.settlementId}/ATTEMPT-01`,
+          actAs: [context.partyId || 'NetworkOperator'],
+          commands: [
+            CantonCommands.failSettlement(
+              settlement.contractId,
+              payload.failureReason || 'TechnicalFailure',
+              payload.failureDetails || 'Rail execution rejected',
+              new Date().toISOString()
+            ),
+            CantonCommands.reopenAfterSettlementFailure(obligation.contractId!)
+          ]
+        });
+      }
+
+      settlement.status = 'SettlementFailed';
+      settlement.failureMetadata = {
+        reason: (payload.failureReason as SettlementFailureReason) || 'TechnicalFailure',
+        details: payload.failureDetails || 'Rail failure callback received',
+        failedAt: new Date(),
+        failedBy: 'ExternalSettlementRail'
+      };
+      await this.settlementRepo.save(settlement);
+
+      obligation.status = 'Confirmed';
+      obligation.version += 1;
+      await this.obligationRepo.save(obligation);
+
+      await this.auditRepo.record({
+        traceId: context.traceId,
+        actor: context.actor,
+        action: 'SETTLEMENT_FAILED_ASYNC',
+        resourceType: 'SettlementInstruction',
+        resourceId: payload.settlementId,
+        contractId: settlement.contractId,
+        payloadAfter: settlement,
+        ipAddress: context.ipAddress
+      });
+
+      await EventPublisher.publishEvent('SETTLEMENT_FAILED', payload.settlementId, settlement, context.traceId);
+      return settlement;
+    }
+  }
 }
+

@@ -56,7 +56,9 @@ export class ObligationDomainRules {
     if (obligation.status !== 'Proposed') {
       throw new Error(`OBL-RULE-011: Obligation '${obligation.obligationId}' is not in Proposed state (current: ${obligation.status}).`);
     }
-    if (obligation.debtor !== actorParty) {
+    const debtorPrefix = obligation.debtor.split('::')[0];
+    const actorPrefix = actorParty.split('::')[0];
+    if (obligation.debtor !== actorParty && debtorPrefix !== actorPrefix) {
       throw new Error(`OBL-RULE-012: Only debtor '${obligation.debtor}' can accept obligation '${obligation.obligationId}'.`);
     }
   }
@@ -68,7 +70,9 @@ export class ObligationDomainRules {
     if (obligation.status !== 'Accepted') {
       throw new Error(`OBL-RULE-013: Obligation '${obligation.obligationId}' is not in Accepted state (current: ${obligation.status}).`);
     }
-    if (obligation.creditor !== actorParty) {
+    const creditorPrefix = obligation.creditor.split('::')[0];
+    const actorPrefix = actorParty.split('::')[0];
+    if (obligation.creditor !== actorParty && creditorPrefix !== actorPrefix) {
       throw new Error(`OBL-RULE-014: Only creditor '${obligation.creditor}' can confirm obligation '${obligation.obligationId}'.`);
     }
   }

@@ -10,6 +10,7 @@ export const createSettlementRouter = (controller: SettlementController): Router
   router.get('/:id', controller.getById);
   router.post('/:id/process', controller.process);
   router.post('/retry', validateBody(RetrySettlementSchema), controller.retry);
+  router.post('/callback', controller.handleCallback);
 
   return router;
 };

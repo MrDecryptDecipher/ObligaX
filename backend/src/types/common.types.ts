@@ -3,6 +3,10 @@ export interface RequestContext {
   actor: string;
   roles: string[];
   partyId: string;
+  tenantId?: string;
+  organizationId?: string;
+  capabilities?: string[];
+  allowedActAs?: string[];
   ipAddress?: string;
   idempotencyKey?: string;
 }

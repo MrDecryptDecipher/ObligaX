@@ -3,6 +3,9 @@ import { ObligationRepository } from '../../infrastructure/database/repositories
 import { CantonClient } from '../../infrastructure/canton/canton-client';
 import { AuditRepository } from '../../infrastructure/database/repositories/audit.repository';
 import { EventPublisher } from '../../infrastructure/messaging/event-publisher';
+import { OutboxService } from '../../infrastructure/messaging/outbox.service';
+import { NettingRiskService } from '../../domain/netting/netting-risk.service';
+import { CantonCommandBuilder } from '../../infrastructure/canton/canton-command-builder';
 import { ProposeNettingDto, NettingProposalEntity, NettingSettlementEntity } from '../../domain/netting/netting.types';
 import { NettingDomainRules } from '../../domain/netting/netting.rules';
 import { NettingCalculator } from '../../domain/netting/netting-calculator';
@@ -38,7 +41,10 @@ export class NettingService {
       obligations.push(obl);
     }
 
-    // 2. Perform institutional netting calculation
+    // Pre-netting risk evaluation
+    NettingRiskService.evaluateNettingEligibility(dto.initiator, dto.counterparty, dto.currency, obligations);
+
+    // 2. Perform institutional deterministic netting calculation
     const { lines, terms } = NettingCalculator.calculateBilateralNetting(
       dto.initiator,
       dto.counterparty,
@@ -49,9 +55,15 @@ export class NettingService {
     const now = new Date();
     const createdDate = DateUtils.parse(now);
 
+    const commandId = CantonCommandBuilder.buildCommandId({
+      tenant: context.tenantId || 'OBLIGAX',
+      operation: 'NETTING_PROPOSE',
+      businessId: dto.nettingId
+    });
+
     // 3. Submit proposal to authoritative Canton Ledger
     const cmdResult = await this.cantonClient.submit({
-      commandId: `cmd-net-prop-${dto.nettingId}`,
+      commandId,
       actAs: [context.partyId || 'NetworkOperator'],
       commands: [
         {
@@ -135,8 +147,14 @@ export class NettingService {
 
     NettingDomainRules.validateAccept(proposal, context.partyId);
 
+    const acceptCmdId = CantonCommandBuilder.buildCommandId({
+      tenant: context.tenantId || 'OBLIGAX',
+      operation: 'NETTING_ACCEPT',
+      businessId: nettingId
+    });
+
     const cmdResult = await this.cantonClient.submit({
-      commandId: `cmd-net-accept-${nettingId}`,
+      commandId: acceptCmdId,
       actAs: [context.partyId],
       commands: [CantonCommands.acceptNettingProposal(proposal.contractId!)]
     });
@@ -167,8 +185,14 @@ export class NettingService {
       throw new NotFoundError('NettingProposal', nettingId);
     }
 
+    const rejectCmdId = CantonCommandBuilder.buildCommandId({
+      tenant: context.tenantId || 'OBLIGAX',
+      operation: 'NETTING_REJECT',
+      businessId: nettingId
+    });
+
     const cmdResult = await this.cantonClient.submit({
-      commandId: `cmd-net-reject-${nettingId}`,
+      commandId: rejectCmdId,
       actAs: [context.partyId],
       commands: [CantonCommands.rejectNettingProposal(proposal.contractId!, reason)]
     });
@@ -211,10 +235,14 @@ export class NettingService {
       }
     }
 
-    // Submit atomic execution to Canton ledger
-    // DAML will consume all participating obligations and generate NettingSettlement atomically
+    const executeCmdId = CantonCommandBuilder.buildCommandId({
+      tenant: context.tenantId || 'OBLIGAX',
+      operation: 'NETTING_EXECUTE',
+      businessId: nettingId
+    });
+
     const cmdResult = await this.cantonClient.submit({
-      commandId: `cmd-net-exec-${nettingId}`,
+      commandId: executeCmdId,
       actAs: [context.partyId],
       commands: [CantonCommands.executeNetting(proposal.contractId!)]
     });

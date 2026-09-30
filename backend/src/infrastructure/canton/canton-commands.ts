@@ -200,3 +200,6 @@ export class CantonCommands {
     };
   }
 }
+
+export * from './canton-command-builder';
+

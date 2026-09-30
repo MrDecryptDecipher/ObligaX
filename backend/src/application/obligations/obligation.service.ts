@@ -2,6 +2,9 @@ import { ObligationRepository } from '../../infrastructure/database/repositories
 import { CantonClient } from '../../infrastructure/canton/canton-client';
 import { AuditRepository } from '../../infrastructure/database/repositories/audit.repository';
 import { EventPublisher } from '../../infrastructure/messaging/event-publisher';
+import { OutboxService } from '../../infrastructure/messaging/outbox.service';
+import { DailyExposureTracker } from '../../domain/governance/daily-exposure.service';
+import { CantonCommandBuilder } from '../../infrastructure/canton/canton-command-builder';
 import { CreateObligationDto, ObligationEntity, ObligationStatus } from '../../domain/obligation/obligation.types';
 import { ObligationDomainRules } from '../../domain/obligation/obligation.rules';
 import { ObligationStateMachine } from '../../domain/obligation/obligation.state-machine';
@@ -10,6 +13,7 @@ import { DateUtils } from '../../utils/dates';
 import { RequestContext } from '../../types/common.types';
 import { NotFoundError, ConflictError } from '../../types/errors.types';
 import { CantonCommands, TEMPLATES } from '../../infrastructure/canton/canton-commands';
+import Decimal from 'decimal.js';
 
 export class ObligationService {
   constructor(
@@ -32,9 +36,18 @@ export class ObligationService {
     const amount = SafeDecimal.from(dto.amount);
     const now = new Date();
 
-    // 1. Authoritative submission to Canton Ledger
+    // Enforce participant daily gross exposure limits
+    DailyExposureTracker.recordTransaction(dto.creditor, amount, new Decimal(1000000000));
+
+    // 1. Authoritative submission to Canton Ledger with deterministic command ID
+    const commandId = CantonCommandBuilder.buildCommandId({
+      tenant: context.tenantId || 'OBLIGAX',
+      operation: 'OBLIGATION_PROPOSE',
+      businessId: dto.obligationId
+    });
+
     const cmdResult = await this.cantonClient.submit({
-      commandId: `cmd-create-${dto.obligationId}`,
+      commandId,
       actAs: [context.partyId || 'NetworkOperator'],
       commands: [
         {
@@ -93,7 +106,7 @@ export class ObligationService {
 
     await this.obligationRepo.save(entity);
 
-    // 3. Forensic Audit Record
+    // 3. Forensic Chained Audit Record
     await this.auditRepo.record({
       traceId: context.traceId,
       actor: context.actor,
@@ -105,7 +118,18 @@ export class ObligationService {
       ipAddress: context.ipAddress
     });
 
-    // 4. Domain Event Dispatch
+    // 4. Transactional Outbox Event
+    await OutboxService.recordEvent({
+      tenantId: context.tenantId || 'OBLIGAX',
+      aggregateType: 'OBLIGATION',
+      aggregateId: dto.obligationId,
+      eventType: 'OBLIGATION_PROPOSED',
+      topic: 'obligax.obligation',
+      payload: entity as any,
+      traceId: context.traceId
+    });
+
+    // 5. Domain Event Dispatch
     await EventPublisher.publishEvent('OBLIGATION_PROPOSED', dto.obligationId, entity, context.traceId);
 
     return entity;
@@ -120,9 +144,15 @@ export class ObligationService {
     ObligationDomainRules.validateAccept(obligation, context.partyId);
     ObligationStateMachine.assertTransition(obligation.status, 'Accepted', obligationId);
 
+    const commandId = CantonCommandBuilder.buildCommandId({
+      tenant: context.tenantId || 'OBLIGAX',
+      operation: 'OBLIGATION_ACCEPT',
+      businessId: obligationId
+    });
+
     // Canton Ledger choice exercise
     const cmdResult = await this.cantonClient.submit({
-      commandId: `cmd-accept-${obligationId}`,
+      commandId,
       actAs: [context.partyId],
       commands: [CantonCommands.acceptObligation(obligation.contractId!)]
     });
@@ -158,8 +188,14 @@ export class ObligationService {
     ObligationDomainRules.validateConfirm(obligation, context.partyId);
     ObligationStateMachine.assertTransition(obligation.status, 'Confirmed', obligationId);
 
+    const commandId = CantonCommandBuilder.buildCommandId({
+      tenant: context.tenantId || 'OBLIGAX',
+      operation: 'OBLIGATION_CONFIRM',
+      businessId: obligationId
+    });
+
     const cmdResult = await this.cantonClient.submit({
-      commandId: `cmd-confirm-${obligationId}`,
+      commandId,
       actAs: [context.partyId],
       commands: [CantonCommands.confirmObligation(obligation.contractId!)]
     });

@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obligax-config
+  namespace: obligax
+  labels:
+    app.kubernetes.io/name: obligax
+    app.kubernetes.io/component: configuration
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  CANTON_LEDGER_HOST: "canton-participant-a.canton-network.svc.cluster.local"
+  CANTON_LEDGER_PORT: "5011"
+  CANTON_ADMIN_PORT: "5012"
+  CANTON_USE_TLS: "true"
+  CANTON_OPERATOR_PARTY: "NetworkOperator::1220d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890a1b2c3"
+  CANTON_PARTICIPANT_ID: "participant1"
+  CANTON_SYNCHRONIZER_ID: "synchronizer1"
+  JWKS_URI: "https://idp.obligax.network/.well-known/jwks.json"
+  JWT_ISSUER: "https://idp.obligax.network/oauth2/v1"
+  JWT_AUDIENCE: "obligax-institutional-api"
+  KAFKA_BROKERS: "kafka.kafka.svc.cluster.local:9092"
+  REDIS_HOST: "redis.obligax.svc.cluster.local"
+  REDIS_PORT: "6379"
+  SETTLEMENT_GATEWAY_URL: "http://obligax-settlement-gateway.obligax.svc.cluster.local:5020"

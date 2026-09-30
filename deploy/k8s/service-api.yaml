@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: obligax-api
+  namespace: obligax
+  labels:
+    app.kubernetes.io/name: obligax-api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: obligax-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+      protocol: TCP

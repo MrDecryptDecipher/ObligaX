@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'obligax-api'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['obligax-api:3000']
+        labels:
+          environment: 'local-dev'
+          service: 'obligax-api'
+
+  - job_name: 'canton-participant1'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['canton-participant1:5011']
+        labels:
+          environment: 'local-dev'
+          node: 'participant1'

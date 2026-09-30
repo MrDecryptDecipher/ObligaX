@@ -31,16 +31,49 @@ export class CantonErrorNormalizer {
       }
     }
 
-    if (message.includes('missing authorization') || message.includes('requires authorizers')) {
+    // gRPC / HTTP error mappings from real Canton Participant
+    if (
+      message.includes('missing authorization') ||
+      message.includes('requires authorizers') ||
+      message.includes('PERMISSION_DENIED') ||
+      message.includes('not authorized')
+    ) {
       return new AppError(403, 'ERR_CANTON_AUTHORIZATION', `Ledger authorization failure: ${message}`);
     }
 
-    if (message.includes('ContractNotFound') || message.includes('could not find contract')) {
+    if (
+      message.includes('ContractNotFound') ||
+      message.includes('could not find contract') ||
+      message.includes('NOT_FOUND')
+    ) {
       return new AppError(404, 'ERR_CANTON_CONTRACT_NOT_FOUND', `Canton contract not found or already consumed: ${message}`);
     }
 
-    if (message.includes('Contention') || message.includes('concurrent modification')) {
+    if (
+      message.includes('Contention') ||
+      message.includes('concurrent modification') ||
+      message.includes('ABORTED') ||
+      message.includes('ALREADY_EXISTS') ||
+      message.includes('RESOURCE_EXHAUSTED')
+    ) {
       return new AppError(409, 'ERR_CANTON_CONTENTION', `Ledger contention detected on contract: ${message}`);
+    }
+
+    if (
+      message.includes('UNAVAILABLE') ||
+      message.includes('connection refused') ||
+      message.includes('ECONNREFUSED') ||
+      message.includes('ENOTFOUND')
+    ) {
+      return new AppError(503, 'ERR_CANTON_UNAVAILABLE', `Canton participant node unavailable: ${message}`);
+    }
+
+    if (message.includes('DEADLINE_EXCEEDED') || message.includes('timeout')) {
+      return new AppError(504, 'ERR_CANTON_TIMEOUT', `Canton ledger command submission timed out: ${message}`);
+    }
+
+    if (message.includes('INVALID_ARGUMENT') || message.includes('MALFORMED')) {
+      return new AppError(400, 'ERR_CANTON_INVALID_ARGUMENT', `Canton command payload malformed: ${message}`);
     }
 
     return new AppError(502, 'ERR_CANTON_GENERIC', `Canton ledger execution failure: ${message}`);

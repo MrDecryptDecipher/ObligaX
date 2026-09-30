@@ -1,0 +1,55 @@
+# ==========================================
+# ObligaX Institutional API Service Dockerfile
+# Multi-stage, non-root (UID 10001), read-only root FS compatible
+# ==========================================
+
+# Stage 1: Build & Compile TypeScript
+FROM node:20-alpine AS builder
+
+WORKDIR /build
+
+# Install build dependencies
+COPY package*.json ./
+COPY tsconfig.json ./
+COPY prisma ./prisma/
+
+RUN npm ci
+
+COPY backend ./backend/
+RUN npm run build
+RUN npm prune --production
+
+# Stage 2: Distroless/Hardened Runtime
+FROM node:20-alpine AS runner
+
+LABEL org.opencontainers.image.title="ObligaX Institutional API" \
+      org.opencontainers.image.description="Enterprise Bilateral Obligation, Netting, and Canton Settlement API" \
+      org.opencontainers.image.vendor="ObligaX Network" \
+      org.opencontainers.image.version="0.1.0"
+
+ENV NODE_ENV=production \
+    PORT=3000 \
+    APP_USER=obligax \
+    APP_UID=10001
+
+# Create unprivileged service user and group
+RUN addgroup -g ${APP_UID} ${APP_USER} && \
+    adduser -u ${APP_UID} -G ${APP_USER} -s /sbin/nologin -D ${APP_USER}
+
+WORKDIR /app
+
+# Copy production artifacts
+COPY --chown=${APP_USER}:${APP_USER} --from=builder /build/dist ./dist
+COPY --chown=${APP_USER}:${APP_USER} --from=builder /build/node_modules ./node_modules
+COPY --chown=${APP_USER}:${APP_USER} --from=builder /build/package*.json ./
+COPY --chown=${APP_USER}:${APP_USER} package-manifest.json ./
+
+# Security hardening: Drop all privileges, enforce non-root
+USER ${APP_USER}
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+
+ENTRYPOINT ["node", "dist/backend/src/index.js"]

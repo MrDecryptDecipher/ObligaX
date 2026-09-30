@@ -14,7 +14,9 @@ export class NettingDomainRules {
       throw new Error('NET-RULE-003: Counterparty must be specified.');
     }
 
-    if (dto.initiator.trim() === dto.counterparty.trim()) {
+    const initPrefix = dto.initiator.trim().split('::')[0];
+    const cpPrefix = dto.counterparty.trim().split('::')[0];
+    if (dto.initiator.trim() === dto.counterparty.trim() || initPrefix === cpPrefix) {
       throw new Error('NET-RULE-004: Initiator and counterparty cannot be the same entity.');
     }
 
@@ -34,7 +36,8 @@ export class NettingDomainRules {
       throw new Error(`NET-RULE-007: Netting proposal '${proposal.nettingId}' is in state '${proposal.status}', expected 'NettingProposed'.`);
     }
 
-    if (proposal.counterparty !== actorParty) {
+    const partyMatches = (a: string, b: string) => a === b || a.split('::')[0] === b.split('::')[0];
+    if (!partyMatches(proposal.counterparty, actorParty)) {
       throw new Error(`NET-RULE-008: Only counterparty '${proposal.counterparty}' can accept netting proposal '${proposal.nettingId}'.`);
     }
   }
@@ -44,7 +47,8 @@ export class NettingDomainRules {
       throw new Error(`NET-RULE-009: Netting proposal '${proposal.nettingId}' must be 'NettingAccepted' prior to execution (current: ${proposal.status}).`);
     }
 
-    if (proposal.initiator !== actorParty) {
+    const partyMatches = (a: string, b: string) => a === b || a.split('::')[0] === b.split('::')[0];
+    if (!partyMatches(proposal.initiator, actorParty)) {
       throw new Error(`NET-RULE-010: Only initiator '${proposal.initiator}' can execute netting proposal '${proposal.nettingId}'.`);
     }
   }

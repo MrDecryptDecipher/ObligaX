@@ -1,0 +1,61 @@
+name: ObligaX Enterprise CI & Canton Verification
+
+on:
+  push:
+    branches: [ main, master, 'release/**' ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    name: Build, Lint & Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: TypeScript Compilation & Type Check
+        run: npm run build
+
+      - name: Verify Package Manifest Integrity
+        run: |
+          node -e "
+            const manifest = require('./package-manifest.json');
+            if (!manifest.darSha256 || manifest.darSha256.length !== 64) {
+              console.error('Invalid DAR SHA-256 in package manifest');
+              process.exit(1);
+            }
+            console.log('Package manifest verified: ' + manifest.packageId);
+          "
+
+      - name: Run Complete Test Suite (Unit, Integration, E2E, Property, Resilience)
+        run: npm test
+
+      - name: Generate Coverage Report
+        run: npm run test:coverage
+
+      - name: Generate Software Bill of Materials (SBOM)
+        run: node scripts/generate-sbom.js
+
+      - name: Upload Test Coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+
+      - name: Upload CycloneDX SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.json

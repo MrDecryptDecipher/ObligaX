@@ -11,6 +11,8 @@ import { SettlementRepository } from './infrastructure/database/repositories/set
 import { IdempotencyRepository } from './infrastructure/database/repositories/idempotency.repository';
 import { AuditRepository } from './infrastructure/database/repositories/audit.repository';
 import { SettlementRailAdapter } from './infrastructure/settlement/settlement-adapter';
+import { ProjectionWorker } from './infrastructure/projection/projection-worker';
+import { OutboxService } from './infrastructure/messaging/outbox.service';
 
 import { ObligationService } from './application/obligations/obligation.service';
 import { AmendmentService } from './application/obligations/amendment.service';
@@ -47,7 +49,14 @@ export const buildAppContainer = () => {
   const settlementService = new SettlementService(settlementRepo, obligationRepo, cantonClient, auditRepo, railAdapter);
   const participantService = new ParticipantService(cantonClient, auditRepo);
   const policyService = new PolicyService(cantonClient, auditRepo);
-  const reconciliationService = new ReconciliationService(obligationRepo, cantonClient);
+  const reconciliationService = new ReconciliationService(obligationRepo, cantonClient, settlementRepo, railAdapter);
+
+  const projectionWorker = new ProjectionWorker(
+    cantonClient.eventStream,
+    obligationRepo,
+    settlementRepo,
+    nettingRepo
+  );
 
   const obligationController = new ObligationController(obligationService, amendmentService, disputeService);
   const nettingController = new NettingController(nettingService);
@@ -68,21 +77,44 @@ export const buildAppContainer = () => {
     idempotencyRepo
   });
 
-  return { app, cantonClient, obligationRepo, nettingRepo, settlementRepo, idempotencyRepo };
+  return {
+    app,
+    cantonClient,
+    obligationRepo,
+    nettingRepo,
+    settlementRepo,
+    idempotencyRepo,
+    auditRepo,
+    reconciliationService,
+    projectionWorker,
+    obligationService,
+    nettingService,
+    settlementService
+  };
 };
 
 const startServer = async () => {
   const port = process.env.PORT || 3000;
   await DatabaseService.connect();
 
-  const { app } = buildAppContainer();
+  const container = buildAppContainer();
+  const { app, projectionWorker } = container;
+
+  // Start background event projection and outbox relay
+  await projectionWorker.start();
+  await OutboxService.startWorker();
 
   const server = app.listen(port, () => {
-    AuditLogger.info(`ObligaX institutional service listening on port ${port} in ${process.env.NODE_ENV || 'development'} mode.`);
+    AuditLogger.info(
+      `ObligaX institutional service listening on port ${port} in ${process.env.NODE_ENV || 'development'} mode.`
+    );
   });
 
   const shutdown = async (signal: string) => {
     AuditLogger.info(`Received ${signal}. Gracefully stopping ObligaX server...`);
+    projectionWorker.stop();
+    OutboxService.stopWorker();
+
     server.close(async () => {
       await DatabaseService.disconnect();
       AuditLogger.info('ObligaX server gracefully terminated.');

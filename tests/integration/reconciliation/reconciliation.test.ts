@@ -3,6 +3,7 @@ import { ObligationRepository } from '@/infrastructure/database/repositories/obl
 import { CantonClient } from '@/infrastructure/canton/canton-client';
 import { getCantonConfig } from '@/infrastructure/canton/canton-config';
 import { TEMPLATES } from '@/infrastructure/canton/canton-commands';
+import { defaultCantonWireServer } from '../../test-harness/canton-wire-server';
 import Decimal from 'decimal.js';
 
 describe('ReconciliationService Integration', () => {
@@ -45,7 +46,7 @@ describe('ReconciliationService Integration', () => {
     });
 
     // 2. Seed Canton active contract set
-    cantonClient.seedContract({
+    defaultCantonWireServer.seedContract({
       contractId: '#c-100',
       templateId: TEMPLATES.OBLIGATION,
       signatories: ['BankA', 'BankB'],
@@ -94,7 +95,7 @@ describe('ReconciliationService Integration', () => {
     });
 
     // Canton Ledger actually transitioned to SettlementPending
-    cantonClient.seedContract({
+    defaultCantonWireServer.seedContract({
       contractId: '#c-201',
       templateId: TEMPLATES.OBLIGATION,
       signatories: ['BankA', 'BankB'],

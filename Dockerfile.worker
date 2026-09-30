@@ -1,0 +1,42 @@
+# ==========================================
+# ObligaX Projection Worker & Event Stream Consumer
+# Multi-stage, non-root (UID 10002)
+# ==========================================
+
+FROM node:20-alpine AS builder
+
+WORKDIR /build
+
+COPY package*.json ./
+COPY tsconfig.json ./
+COPY prisma ./prisma/
+
+RUN npm ci
+
+COPY backend ./backend/
+RUN npm run build
+RUN npm prune --production
+
+FROM node:20-alpine AS runner
+
+LABEL org.opencontainers.image.title="ObligaX Projection Worker" \
+      org.opencontainers.image.description="Background Canton event projection worker and outbox message relay" \
+      org.opencontainers.image.vendor="ObligaX Network"
+
+ENV NODE_ENV=production \
+    APP_USER=obligax \
+    APP_UID=10002
+
+RUN addgroup -g ${APP_UID} ${APP_USER} && \
+    adduser -u ${APP_UID} -G ${APP_USER} -s /sbin/nologin -D ${APP_USER}
+
+WORKDIR /app
+
+COPY --chown=${APP_USER}:${APP_USER} --from=builder /build/dist ./dist
+COPY --chown=${APP_USER}:${APP_USER} --from=builder /build/node_modules ./node_modules
+COPY --chown=${APP_USER}:${APP_USER} --from=builder /build/package*.json ./
+COPY --chown=${APP_USER}:${APP_USER} package-manifest.json ./
+
+USER ${APP_USER}
+
+ENTRYPOINT ["node", "dist/backend/src/infrastructure/projection/projection-worker.js"]

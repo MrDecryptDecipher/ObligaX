@@ -1,0 +1,53 @@
+// Canton Topology Initialization Script for ObligaX Multi-Participant Network
+// Usage: canton -c infra/canton/participant.conf,infra/canton/synchronizer.conf --bootstrap infra/canton/topology/init-topology.canton
+
+println("Initializing ObligaX Multi-Participant Canton Network Topology...")
+
+// 1. Connect Participants to Synchronizer
+val synchronizerId = synchronizer1.synchronizer_id()
+println(s"Connecting participants to synchronizer: $synchronizerId")
+
+participant1.synchronizers.connect_local(synchronizer1)
+participant2.synchronizers.connect_local(synchronizer1)
+participant3.synchronizers.connect_local(synchronizer1)
+
+// 2. Allocate Institutional Parties with Cryptographic Namespaces
+val bankA = participant1.parties.enable("BankA", displayName = "Bank A Global Markets")
+val bankB = participant2.parties.enable("BankB", displayName = "Bank B Treasury Operations")
+val bankC = participant3.parties.enable("BankC", displayName = "Bank C Institutional Custody")
+val operator = participant1.parties.enable("NetworkOperator", displayName = "ObligaX Network Operator")
+val regulator = participant1.parties.enable("Regulator", displayName = "Institutional Supervisory Authority")
+
+println(s"Allocated BankA Party: ${bankA.party}")
+println(s"Allocated BankB Party: ${bankB.party}")
+println(s"Allocated BankC Party: ${bankC.party}")
+println(s"Allocated Operator Party: ${operator.party}")
+println(s"Allocated Regulator Party: ${regulator.party}")
+
+// 3. Deploy DAR Package across all participants
+val darPath = "daml/.daml/dist/obligax-0.1.0.dar"
+println(s"Deploying DAR $darPath...")
+
+val pkg1 = participant1.dars.upload(darPath)
+val pkg2 = participant2.dars.upload(darPath)
+val pkg3 = participant3.dars.upload(darPath)
+
+println("DAR uploaded successfully to participant1, participant2, participant3.")
+
+// 4. Vet Package for Synchronizer Connectivity
+participant1.topology.vetted_packages.authorize(
+  synchronizerId = synchronizerId,
+  packages = Seq(pkg1)
+)
+
+participant2.topology.vetted_packages.authorize(
+  synchronizerId = synchronizerId,
+  packages = Seq(pkg2)
+)
+
+participant3.topology.vetted_packages.authorize(
+  synchronizerId = synchronizerId,
+  packages = Seq(pkg3)
+)
+
+println("Canton Multi-Participant Topology successfully initialized and vetted.")

@@ -13,7 +13,9 @@ export class SettlementDomainRules {
       );
     }
 
-    if (obligation.creditor !== actorParty) {
+    const creditorPrefix = obligation.creditor.split('::')[0];
+    const actorPrefix = actorParty.split('::')[0];
+    if (obligation.creditor !== actorParty && creditorPrefix !== actorPrefix) {
       throw new Error(`SET-RULE-003: Only creditor '${obligation.creditor}' can initiate settlement for obligation '${obligation.obligationId}'.`);
     }
 

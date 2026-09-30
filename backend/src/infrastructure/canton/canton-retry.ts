@@ -13,7 +13,7 @@ export class CantonRetryPolicy {
   ): Promise<T> {
     const maxRetries = options.maxRetries ?? 3;
     const initialDelayMs = options.initialDelayMs ?? 200;
-    const maxDelayMs = options.maxDelayMs ?? 2000;
+    const maxDelayMs = options.maxDelayMs ?? 2500;
     const factor = options.factor ?? 2;
 
     let attempt = 0;
@@ -28,15 +28,19 @@ export class CantonRetryPolicy {
         const isRetryable =
           errMsg.includes('Contention') ||
           errMsg.includes('timeout') ||
+          errMsg.includes('DEADLINE_EXCEEDED') ||
           errMsg.includes('UNAVAILABLE') ||
-          errMsg.includes('connection refused') ||
+          errMsg.includes('ECONNREFUSED') ||
+          errMsg.includes('ECONNRESET') ||
+          errMsg.includes('503') ||
+          errMsg.includes('429') ||
           errMsg.includes('retryable');
 
         if (attempt > maxRetries || !isRetryable) {
           throw err;
         }
 
-        // Add full jitter
+        // Full jitter to prevent thundering herd against participant
         const jitter = Math.random() * currentDelay;
         const sleepMs = Math.min(currentDelay + jitter, maxDelayMs);
         await new Promise(resolve => setTimeout(resolve, sleepMs));
@@ -45,6 +49,6 @@ export class CantonRetryPolicy {
       }
     }
 
-    throw new Error('RETRY-001: Maximum retry attempts exceeded.');
+    throw new Error('RETRY-001: Maximum retry attempts exceeded for Canton operation.');
   }
 }

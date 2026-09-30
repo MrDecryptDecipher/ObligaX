@@ -1,0 +1,263 @@
+version: '3.8'
+
+services:
+  # =========================================================================
+  # Canton Ledger Topology: Multi-Participant Network & Synchronizer
+  # =========================================================================
+  canton-synchronizer:
+    image: digitalasset/canton-open-source:2.10.6
+    container_name: canton-synchronizer
+    command: ["daemon", "-c", "/canton/synchronizer.conf"]
+    volumes:
+      - ./infra/canton/synchronizer.conf:/canton/synchronizer.conf:ro
+      - ./infra/canton/certificates:/canton/certificates:ro
+    ports:
+      - "5018:5018"
+      - "5019:5019"
+      - "5028:5028"
+    networks:
+      - obligax-net
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 5028 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  canton-participant-a:
+    image: digitalasset/canton-open-source:2.10.6
+    container_name: canton-participant-a
+    command: ["daemon", "-c", "/canton/participant.conf"]
+    volumes:
+      - ./infra/canton/participant.conf:/canton/participant.conf:ro
+      - ./infra/canton/certificates:/canton/certificates:ro
+      - ./package-manifest.json:/canton/package-manifest.json:ro
+    ports:
+      - "5011:5011"
+      - "5012:5012"
+    depends_on:
+      canton-synchronizer:
+        condition: service_healthy
+    networks:
+      - obligax-net
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 5011 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  canton-participant-b:
+    image: digitalasset/canton-open-source:2.10.6
+    container_name: canton-participant-b
+    command: ["daemon", "-c", "/canton/participant.conf"]
+    volumes:
+      - ./infra/canton/participant.conf:/canton/participant.conf:ro
+      - ./infra/canton/certificates:/canton/certificates:ro
+    ports:
+      - "5021:5021"
+      - "5022:5022"
+    depends_on:
+      canton-synchronizer:
+        condition: service_healthy
+    networks:
+      - obligax-net
+
+  canton-participant-c:
+    image: digitalasset/canton-open-source:2.10.6
+    container_name: canton-participant-c
+    command: ["daemon", "-c", "/canton/participant.conf"]
+    volumes:
+      - ./infra/canton/participant.conf:/canton/participant.conf:ro
+      - ./infra/canton/certificates:/canton/certificates:ro
+    ports:
+      - "5031:5031"
+      - "5032:5032"
+    depends_on:
+      canton-synchronizer:
+        condition: service_healthy
+    networks:
+      - obligax-net
+
+  # =========================================================================
+  # Authoritative Infrastructure: PostgreSQL, Redis, Kafka (Redpanda)
+  # =========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: obligax-postgres
+    environment:
+      POSTGRES_USER: obligax_app
+      POSTGRES_PASSWORD: obligax_secure_password_2026
+      POSTGRES_DB: obligax
+    volumes:
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - obligax-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U obligax_app -d obligax"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: obligax-redis
+    volumes:
+      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    ports:
+      - "6379:6379"
+    networks:
+      - obligax-net
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.10
+    container_name: obligax-redpanda
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 512M
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+      - "9644:9644"
+    networks:
+      - obligax-net
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v2.4.3
+    container_name: obligax-redpanda-console
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redpanda
+    networks:
+      - obligax-net
+
+  # =========================================================================
+  # Application Services: ObligaX API, Worker, Settlement Gateway
+  # =========================================================================
+  obligax-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: obligax-api
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://obligax_app:obligax_secure_password_2026@postgres:5432/obligax
+      CANTON_HOST: canton-participant-a
+      CANTON_LEDGER_PORT: 5011
+      CANTON_ADMIN_PORT: 5012
+      CANTON_USE_TLS: "false"
+      KAFKA_BROKERS: redpanda:9092
+      SETTLEMENT_GATEWAY_URL: http://settlement-gateway:5020
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      canton-participant-a:
+        condition: service_healthy
+    networks:
+      - obligax-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  obligax-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: obligax-worker
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://obligax_app:obligax_secure_password_2026@postgres:5432/obligax
+      CANTON_HOST: canton-participant-a
+      CANTON_LEDGER_PORT: 5011
+      KAFKA_BROKERS: redpanda:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      canton-participant-a:
+        condition: service_healthy
+    networks:
+      - obligax-net
+
+  settlement-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.settlement-gateway
+    container_name: settlement-gateway
+    environment:
+      PORT: 5020
+      SETTLEMENT_WEBHOOK_SECRET: obligax-institutional-settlement-hmac-secret-2026
+      OBLIGAX_CALLBACK_URL: http://obligax-api:3000/api/v1/settlements/callback
+    ports:
+      - "5020:5020"
+    networks:
+      - obligax-net
+
+  # =========================================================================
+  # Frontend & Observability
+  # =========================================================================
+  frontend:
+    image: nginx:alpine
+    container_name: obligax-frontend
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    ports:
+      - "80:80"
+    depends_on:
+      - obligax-api
+    networks:
+      - obligax-net
+
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    container_name: obligax-prometheus
+    volumes:
+      - ./infra/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - obligax-net
+
+  grafana:
+    image: grafana/grafana:10.3.3
+    container_name: obligax-grafana
+    ports:
+      - "3001:3000"
+    networks:
+      - obligax-net
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    container_name: obligax-jaeger
+    environment:
+      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+    networks:
+      - obligax-net
+
+networks:
+  obligax-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
