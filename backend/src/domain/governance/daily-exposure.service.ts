@@ -60,6 +60,33 @@ export class DailyExposureTracker {
     return this.store.get(key) || null;
   }
 
+  public static canAccommodateVolume(partyId: string, amount: Decimal, maxLimit: Decimal, date = new Date()): boolean {
+    const key = this.getKey(partyId, date);
+    const existing = this.store.get(key);
+    const current = existing ? existing.dailyGrossVolume : new Decimal(0);
+    const newGross = SafeDecimal.add(current, amount);
+    return !SafeDecimal.gt(newGross, maxLimit);
+  }
+
+  public static recordExposure(partyId: string, amount: Decimal, date = new Date()): void {
+    const key = this.getKey(partyId, date);
+    const existing = this.store.get(key) || {
+      partyId,
+      dateString: date.toISOString().split('T')[0],
+      dailyGrossVolume: new Decimal(0),
+      dailyNetExposure: new Decimal(0),
+      dailySettlementVolume: new Decimal(0),
+      maximumDailyGrossVolume: new Decimal(1000000000),
+      lastUpdated: new Date()
+    };
+    existing.dailyGrossVolume = SafeDecimal.add(existing.dailyGrossVolume, amount);
+    this.store.set(key, existing);
+  }
+
+  public static reset(): void {
+    this.store.clear();
+  }
+
   public static clear(): void {
     this.store.clear();
   }

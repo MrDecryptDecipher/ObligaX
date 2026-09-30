@@ -660,3 +660,91 @@ testGovernanceAndPolicy = script do
 
   Some reactivatedReg <- queryContractId bankA reactivatedRegCid
   assert (reactivatedReg.status == ParticipantActive)
+
+-- ------------------------------------------------------------
+-- 8. Adversarial Tests (Item 33)
+-- ------------------------------------------------------------
+testAdversarialScenarios : Script ()
+testAdversarialScenarios = script do
+  (operator, bankA, bankB, _, oblFactoryCid, _) <- setupTestEnvironment
+  let today = date 2026 Sep 30
+  let dueDateVal = date 2026 Oct 15
+
+  -- 1. Adversary Test: Invariant rejects self-obligation (Creditor == Debtor)
+  submitMustFail bankA do
+    exerciseCmd oblFactoryCid CreateObligation with
+      caller = bankA
+      creditor = bankA
+      debtor = bankA
+      obligationId = "ADV-OBL-SELF"
+      description = "Self-obligation should be rejected"
+      amount = 50000.0
+      currency = USD
+      createdDate = today
+      dueDate = dueDateVal
+      priority = Normal
+      sourceSystem = "TradingDesk"
+      sourceReference = "ADV-01"
+      businessUnit = "Treasury"
+
+  -- 2. Adversary Test: Invariant rejects non-positive amount (amount <= 0.0)
+  submitMustFail bankA do
+    exerciseCmd oblFactoryCid CreateObligation with
+      caller = bankA
+      creditor = bankB
+      debtor = bankA
+      obligationId = "ADV-OBL-ZERO-AMT"
+      description = "Zero amount should be rejected"
+      amount = 0.0
+      currency = USD
+      createdDate = today
+      dueDate = dueDateVal
+      priority = Normal
+      sourceSystem = "TradingDesk"
+      sourceReference = "ADV-02"
+      businessUnit = "Treasury"
+
+  -- 3. Create valid Proposed obligation (bankA is debtor, bankB is creditor)
+  oblCid <- submit bankA do
+    exerciseCmd oblFactoryCid CreateObligation with
+      caller = bankA
+      creditor = bankB
+      debtor = bankA
+      obligationId = "ADV-OBL-001"
+      description = "Adversarial test obligation"
+      amount = 100000.0
+      currency = USD
+      createdDate = today
+      dueDate = dueDateVal
+      priority = Normal
+      sourceSystem = "TradingDesk"
+      sourceReference = "ADV-03"
+      businessUnit = "Treasury"
+
+  -- 4. Adversary Test: Wrong controller (Bank B / creditor tries to Accept)
+  -- Only debtor (Bank A) can execute AcceptObligation
+  submitMustFail bankB do
+    exerciseCmd oblCid AcceptObligation
+
+  -- 5. Valid accept by debtor
+  acceptedCid <- submit bankA do
+    exerciseCmd oblCid AcceptObligation
+
+  -- 6. Adversary Test: Double Acceptance
+  -- Once in Accepted state, AcceptObligation must fail precondition
+  submitMustFail bankA do
+    exerciseCmd acceptedCid AcceptObligation
+
+  -- 7. Adversary Test: Wrong controller (Bank A / debtor tries to Confirm)
+  -- Only creditor (Bank B) can execute ConfirmObligation
+  submitMustFail bankA do
+    exerciseCmd acceptedCid ConfirmObligation
+
+  -- 8. Valid confirm by creditor
+  confirmedCid <- submit bankB do
+    exerciseCmd acceptedCid ConfirmObligation
+
+  -- 9. Adversary Test: Cannot accept an already confirmed obligation
+  submitMustFail bankA do
+    exerciseCmd confirmedCid AcceptObligation
+
